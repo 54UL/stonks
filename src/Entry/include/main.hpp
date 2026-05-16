@@ -1,0 +1,6 @@
+#ifndef ENTRY_POINT_HPP
+#define ENTRY_POINT_HPP
+
+#define COMPILED_EXEC_NAME "STNKS"
+
+#endif
