@@ -1,0 +1,18 @@
+{
+    "name": "stnks",
+    "version": "1.0.0",
+    "builtin-baseline": "587cd223b4ec2f95ac49d393843107bdbd9d8d76",
+    "dependencies": [
+      "spdlog",
+      "sdl2",
+      "glew",
+      "glm",
+      "stb",
+      "cereal",
+      "nlohmann-json",
+      "cpr",
+      "sqlite3",
+      "cpp-httplib",
+      "gtest"
+    ]
+  }
