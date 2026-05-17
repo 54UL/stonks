@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 4.0.2)
+cmake_minimum_required(VERSION 3.20)
 
 # VCPKG — toolchain must be set BEFORE project()
 # Set VCPKG_ROOT via environment variable or pass -DVCPKG_ROOT=... to cmake

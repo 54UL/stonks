@@ -26,6 +26,10 @@ namespace stnks::gk
 
         inline constexpr const char* ENGINE_EXE_DIR     = "exe_dir";
         inline constexpr const char* ENGINE_WORKING_DIR = "working_dir";
+
+        // AI settings (persisted)
+        inline constexpr const char* AI_AUTO_TRADE     = "ai_auto_trade";      // "1" = enabled
+        inline constexpr const char* AI_INTERVAL_SEC   = "ai_interval_sec";    // analysis interval
     }
 
 } // namespace stnks::gk

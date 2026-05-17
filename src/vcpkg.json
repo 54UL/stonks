@@ -13,6 +13,7 @@
       "cpr",
       "sqlite3",
       "cpp-httplib",
-      "gtest"
+      "gtest",
+      "enet"
     ]
   }

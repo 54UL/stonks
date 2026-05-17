@@ -3,6 +3,8 @@
 #include <Charts/ChartLayer.hpp>
 #include <Charts/IStrategyRenderer.hpp>
 #include <Charts/TPSLRenderer.hpp>
+#include <Charts/PositionRenderer.hpp>
+#include <Charts/StrategyWizard.hpp>
 #include <Strategy/Strategy.hpp>
 #include <vector>
 #include <functional>
@@ -20,7 +22,7 @@ namespace stnks
         // Strategies set externally from UI each frame
         std::vector<Strategy> strategies;
 
-        // Callback fired when a strategy is created, modified, or deleted visually.
+        // Callback fired when a strategy is created or modified via gizmo/wizard.
         // bool isNew: true=insert, false=update
         std::function<void(const Strategy&, bool isNew)> onStrategyChanged;
 
@@ -28,19 +30,23 @@ namespace stnks
         std::function<void(int64_t id)> onStrategyCancelled;
 
         // Callback fired when a strategy gizmo is selected (click to edit).
-        // The UI uses this to focus the Strategies tab on the selected row.
         std::function<void(int64_t id)> onStrategySelected;
 
-        // Callback fired when editing is dismissed via the gizmo Cancel button.
+        // Callback fired when editing is dismissed via Cancel
         std::function<void()> onEditingDismissed;
 
-        // Currently selected/editing strategy ID (readable by UI for highlighting)
+        // Currently selected/editing strategy ID
         int64_t GetEditingId() const { return editingId_; }
+
+        // Access the wizard (UI uses this for the "+ Position" button etc.)
+        StrategyWizard& GetWizard() { return wizard_; }
+        const StrategyWizard& GetWizard() const { return wizard_; }
+
+        // Set current price for position P&L rendering
+        void SetCurrentPrice(float price) { posRenderer_.SetCurrentPrice(price); }
 
         // ── Context menu ────────────────────────────────────────────────────
 
-        // Call from StockChart when user right-clicks on the chart.
-        // Stores the price and opens the popup.
         void OpenContextMenu(float priceAtClick, const std::string& symbol)
         {
             contextMenuPrice_  = priceAtClick;
@@ -48,7 +54,6 @@ namespace stnks
             contextMenuOpen_   = true;
         }
 
-        // Draw the context menu popup (call from StockChart::Draw after ImGui::BeginChild)
         void DrawContextMenu(const ChartViewport& vp)
         {
             if (contextMenuOpen_)
@@ -63,16 +68,23 @@ namespace stnks
                 ImGui::Separator();
 
                 if (ImGui::MenuItem("TP/SL (Long)"))
-                {
-                    CreatePending(StrategyDirection::Long);
-                }
+                    OpenWizardCreate(StrategyDirection::Long, StrategyType::TPSL);
                 if (ImGui::MenuItem("TP/SL (Short)"))
-                {
-                    CreatePending(StrategyDirection::Short);
-                }
+                    OpenWizardCreate(StrategyDirection::Short, StrategyType::TPSL);
 
                 ImGui::Separator();
-                ImGui::TextDisabled("More types coming...");
+
+                if (ImGui::MenuItem("Position (Long)"))
+                    OpenWizardCreate(StrategyDirection::Long, StrategyType::Position);
+                if (ImGui::MenuItem("Position (Short)"))
+                    OpenWizardCreate(StrategyDirection::Short, StrategyType::Position);
+
+                ImGui::Separator();
+
+                if (ImGui::MenuItem("AI Strategy (Long)"))
+                    OpenWizardCreate(StrategyDirection::Long, StrategyType::AI);
+                if (ImGui::MenuItem("AI Strategy (Short)"))
+                    OpenWizardCreate(StrategyDirection::Short, StrategyType::AI);
 
                 ImGui::EndPopup();
             }
@@ -80,20 +92,28 @@ namespace stnks
 
         // ── State queries ───────────────────────────────────────────────────
 
-        bool IsEditing() const { return hasPending_ || editingId_ > 0; }
-        bool HasPending() const { return hasPending_; }
+        bool IsEditing() const { return wizard_.IsOpen() || editingId_ > 0; }
+        bool HasPending() const { return wizard_.IsCreating(); }
 
-        // Select an existing strategy for editing (click on it)
         void StartEditing(int64_t id)
         {
+            // Find the strategy and open wizard in edit mode
+            for (auto& s : strategies)
+            {
+                if (s.id == id)
+                {
+                    wizard_.OpenEdit(s);
+                    editingId_ = id;
+                    return;
+                }
+            }
             editingId_ = id;
-            hasPending_ = false;
         }
 
         void StopEditing()
         {
             editingId_ = -1;
-            hasPending_ = false;
+            wizard_.Close();
         }
 
         // ── Draw ────────────────────────────────────────────────────────────
@@ -101,29 +121,37 @@ namespace stnks
         void Draw(ImDrawList* drawList, const ChartViewport& vp,
                   const StockQuote& data) override
         {
-            // Draw all existing strategies
+            const std::vector<Candle>* candles = data.candles.empty() ? nullptr : &data.candles;
+
+            // Draw all existing strategies with appropriate renderer
             for (auto& s : strategies)
             {
+                IStrategyRenderer* renderer = GetRenderer(s.type);
                 bool isEditing = (s.id == editingId_);
-                tpslRenderer_.Draw(drawList, vp, s, isEditing);
+                renderer->Draw(drawList, vp, s, isEditing, candles);
 
-                if (isEditing)
+                if (isEditing && wizard_.IsEditing())
                 {
-                    Strategy editCopy = s;
-                    auto interaction = tpslRenderer_.HandleGizmos(drawList, vp, editCopy);
+                    // Gizmos operate on the wizard's strategy copy
+                    Strategy& wizStrat = wizard_.GetStrategy();
+                    auto interaction = renderer->HandleGizmos(drawList, vp, wizStrat);
 
                     if (interaction.modified)
                     {
-                        s.entryPrice = editCopy.entryPrice;
-                        s.takeProfit = editCopy.takeProfit;
-                        s.stopLoss   = editCopy.stopLoss;
+                        // Sync gizmo changes back to the displayed strategy
+                        s.entryPrice = wizStrat.entryPrice;
+                        s.takeProfit = wizStrat.takeProfit;
+                        s.stopLoss   = wizStrat.stopLoss;
                     }
 
                     if (interaction.confirmed)
                     {
+                        // Gizmo confirm: apply wizard state → save
+                        s = wizStrat;
                         if (onStrategyChanged)
                             onStrategyChanged(s, false);
                         editingId_ = -1;
+                        wizard_.Close();
                     }
 
                     if (interaction.cancelled)
@@ -131,16 +159,33 @@ namespace stnks
                         if (onEditingDismissed)
                             onEditingDismissed();
                         editingId_ = -1;
+                        wizard_.Close();
                     }
                 }
-                else if (!hasPending_ && editingId_ <= 0)
+                else if (isEditing && !wizard_.IsOpen())
                 {
-                    // Click on any of the strategy's lines to start editing
-                    if (s.IsActive() &&
-                        (IsClickOnLine(vp, vp.PriceToY(s.entryPrice)) ||
-                         IsClickOnLine(vp, vp.PriceToY(s.takeProfit)) ||
-                         IsClickOnLine(vp, vp.PriceToY(s.stopLoss))))
+                    // Editing via gizmo only (wizard was closed externally)
+                    auto interaction = renderer->HandleGizmos(drawList, vp, s);
+
+                    if (interaction.confirmed)
                     {
+                        if (onStrategyChanged)
+                            onStrategyChanged(s, false);
+                        editingId_ = -1;
+                    }
+                    if (interaction.cancelled)
+                    {
+                        if (onEditingDismissed)
+                            onEditingDismissed();
+                        editingId_ = -1;
+                    }
+                }
+                else if (!wizard_.IsOpen() && editingId_ <= 0)
+                {
+                    // Click on strategy lines to start editing
+                    if (s.IsActive() && ClickHitsStrategy(vp, s))
+                    {
+                        wizard_.OpenEdit(s);
                         editingId_ = s.id;
                         if (onStrategySelected)
                             onStrategySelected(s.id);
@@ -148,32 +193,74 @@ namespace stnks
                 }
             }
 
-            // Draw pending (being-created) strategy
-            if (hasPending_)
+            // Draw pending (wizard creating new) with gizmos
+            if (wizard_.IsCreating())
             {
-                tpslRenderer_.Draw(drawList, vp, pendingStrategy_, true);
-                auto interaction = tpslRenderer_.HandleGizmos(drawList, vp, pendingStrategy_);
+                Strategy& pending = wizard_.GetStrategy();
+                IStrategyRenderer* renderer = GetRenderer(pending.type);
+                renderer->Draw(drawList, vp, pending, true, candles);
+                auto interaction = renderer->HandleGizmos(drawList, vp, pending);
 
                 if (interaction.confirmed)
                 {
-                    pendingStrategy_.createdAt = std::time(nullptr);
+                    pending.createdAt = std::time(nullptr);
                     if (onStrategyChanged)
-                        onStrategyChanged(pendingStrategy_, true);
-                    hasPending_ = false;
+                        onStrategyChanged(pending, true);
+                    wizard_.Close();
                 }
 
                 if (interaction.cancelled)
-                {
-                    hasPending_ = false;
-                }
+                    wizard_.Close();
             }
 
-            // Draw context menu
             DrawContextMenu(vp);
         }
 
+        // Draw the wizard overlay UI. Call AFTER the chart child is drawn.
+        // This is separate from Draw() because it needs ImGui widget context.
+        void DrawWizard(const ImVec2& chartMin, const ImVec2& chartMax,
+                        int focusedCandle, int totalCandles,
+                        const std::vector<Candle>* candles)
+        {
+            if (!wizard_.IsOpen()) return;
+
+            wizard_.Draw(chartMin, chartMax, focusedCandle, totalCandles, candles);
+
+            // Handle wizard results
+            if (wizard_.WasConfirmed())
+            {
+                Strategy result = wizard_.GetStrategy();
+
+                if (editingId_ > 0)
+                {
+                    // Edit mode: update existing
+                    result.id = editingId_;
+                    if (onStrategyChanged)
+                        onStrategyChanged(result, false);
+                }
+                else
+                {
+                    // Create mode: insert new
+                    if (onStrategyChanged)
+                        onStrategyChanged(result, true);
+                }
+
+                editingId_ = -1;
+                wizard_.ConsumeResult();
+            }
+            else if (wizard_.WasCancelled())
+            {
+                if (editingId_ > 0 && onEditingDismissed)
+                    onEditingDismissed();
+                editingId_ = -1;
+                wizard_.ConsumeResult();
+            }
+        }
+
     private:
-        TPSLRenderer tpslRenderer_;
+        TPSLRenderer     tpslRenderer_;
+        PositionRenderer posRenderer_;
+        StrategyWizard   wizard_;
 
         // Context menu state
         float       contextMenuPrice_  = 0.f;
@@ -181,48 +268,51 @@ namespace stnks
         bool        contextMenuOpen_   = false;
 
         // Editing state
-        int64_t  editingId_  = -1;    // ID of strategy being edited (-1 = none)
-        Strategy pendingStrategy_;     // Strategy being created (not yet saved)
-        bool     hasPending_ = false;
+        int64_t editingId_ = -1;
 
-        void CreatePending(StrategyDirection direction)
+        IStrategyRenderer* GetRenderer(StrategyType type)
         {
-            float entry = contextMenuPrice_;
-            float offsetPct = 0.05f; // 5% default
-
-            pendingStrategy_ = Strategy{};
-            pendingStrategy_.symbol    = contextMenuSymbol_;
-            pendingStrategy_.direction = direction;
-            pendingStrategy_.entryPrice = entry;
-
-            if (direction == StrategyDirection::Long)
+            switch (type)
             {
-                pendingStrategy_.takeProfit = entry * (1.f + offsetPct);
-                pendingStrategy_.stopLoss   = entry * (1.f - offsetPct * 0.6f);
+            case StrategyType::TPSL: return &tpslRenderer_;
+            case StrategyType::Position:
+            case StrategyType::AI:
+                return &posRenderer_;
             }
-            else
-            {
-                pendingStrategy_.takeProfit = entry * (1.f - offsetPct);
-                pendingStrategy_.stopLoss   = entry * (1.f + offsetPct * 0.6f);
-            }
-
-            hasPending_ = true;
-            editingId_  = -1;
+            return &tpslRenderer_;
         }
 
-        bool IsClickOnLine(const ChartViewport& vp, float lineY)
+        void OpenWizardCreate(StrategyDirection direction, StrategyType type)
+        {
+            wizard_.OpenCreate(contextMenuSymbol_, type, direction, contextMenuPrice_);
+            editingId_ = -1;
+        }
+
+        bool ClickHitsStrategy(const ChartViewport& vp, const Strategy& s)
         {
             if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left)) return false;
             if (!ImGui::IsWindowHovered()) return false;
 
             ImVec2 mouse = ImGui::GetMousePos();
-
-            // Check mouse is within chart bounds
             if (mouse.x < vp.chartOrigin.x ||
                 mouse.x > vp.chartOrigin.x + vp.chartSize.x) return false;
 
-            // 6px tolerance for clicking on a line
-            return std::abs(mouse.y - lineY) < 6.f;
+            float tolerance = 6.f;
+
+            // Always check entry line
+            if (std::abs(mouse.y - vp.PriceToY(s.entryPrice)) < tolerance)
+                return true;
+
+            // TPSL: also check TP and SL lines
+            if (s.type == StrategyType::TPSL)
+            {
+                if (s.takeProfit > 0.f && std::abs(mouse.y - vp.PriceToY(s.takeProfit)) < tolerance)
+                    return true;
+                if (s.stopLoss > 0.f && std::abs(mouse.y - vp.PriceToY(s.stopLoss)) < tolerance)
+                    return true;
+            }
+
+            return false;
         }
     };
 

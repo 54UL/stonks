@@ -4,6 +4,7 @@
 
 namespace stnks
 {
+    //TODO: IMPROVE AND REFACTOR!!!
     HttpClient::HttpClient(ThreadRegistry& threads) : threads_(threads) {}
 
     HttpResponse HttpClient::Get(const std::string& url)

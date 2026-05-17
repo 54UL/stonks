@@ -40,6 +40,12 @@ namespace stnks
         // Get the strategy layer (may be null if not added yet)
         StrategyLayer* GetStrategyLayer() { return strategyLayer_; }
 
+        // Get the currently focused (hovered) candle index, or -1 if none
+        int GetFocusedCandle() const { return viewport_.focusedCandle; }
+
+        // Get the total number of candles loaded
+        int GetCandleCount() const { return (int)data_.candles.size(); }
+
     private:
         void HandleInput();
         void ResolveFocusedCandle();
@@ -73,6 +79,7 @@ namespace stnks
         float dragStartX_     = 0.f;
         int   dragStartIndex_ = 0;
         float dragCandleStep_ = 0.f;
+        bool  yLocked_        = false;  // True when user manually panned Y axis
 
         // Grid helpers
         static float NiceStep(float range, float targetLines);
@@ -84,11 +91,11 @@ namespace stnks
         float rightAxisWidth_    = 60.f;
         float zoomSpeed_         = 0.15f;  // 15% per scroll notch
 
-        static constexpr ImU32 kGridMajorColor = IM_COL32(45, 45, 58, 255);
-        static constexpr ImU32 kGridMinorColor = IM_COL32(30, 30, 40, 255);
-        static constexpr ImU32 kAxisTextColor  = IM_COL32(160, 160, 170, 255);
-        static constexpr ImU32 kCrosshairColor = IM_COL32(100, 100, 120, 180);
-        static constexpr ImU32 kBgColor        = IM_COL32(18, 18, 24, 255);
+        static constexpr ImU32 kGridMajorColor = IM_COL32(42, 48, 65, 200);
+        static constexpr ImU32 kGridMinorColor = IM_COL32(30, 34, 48, 130);
+        static constexpr ImU32 kAxisTextColor  = IM_COL32(145, 155, 175, 255);
+        static constexpr ImU32 kCrosshairColor = IM_COL32(90, 110, 140, 160);
+        static constexpr ImU32 kBgColor        = IM_COL32(14, 16, 22, 255);
     };
 
 } // namespace stnks

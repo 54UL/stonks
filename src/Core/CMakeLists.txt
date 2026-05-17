@@ -62,6 +62,8 @@ set(STNKS_CORE_HEADERS
     include/Service/IStrategyService.hpp
     include/Service/LocalStrategyService.hpp
     include/Service/RemoteStrategyService.hpp
+    # Net
+    include/Net/UdpMarketFeed.hpp
     # Server
     include/Server/IStrategyAction.hpp
     include/Server/BrokerAction.hpp
@@ -105,6 +107,8 @@ set(STNKS_CORE_SOURCES
     # Service
     src/Service/LocalStrategyService.cpp
     src/Service/RemoteStrategyService.cpp
+    # Net
+    src/Net/UdpMarketFeed.cpp
     # Server
     src/Server/BrokerAction.cpp
     src/Server/SentimentAction.cpp
@@ -120,6 +124,7 @@ set(STNKS_CORE_SOURCES
     external/imgui/backends/imgui_impl_opengl3.cpp)
 
 # PACKAGES
+find_package(Threads REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(SDL2 REQUIRED)
 find_package(glm CONFIG REQUIRED)
@@ -130,6 +135,7 @@ find_package(cpr CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(httplib CONFIG REQUIRED)
+find_package(unofficial-enet CONFIG REQUIRED)
 
 # DIR INCLUDES
 include_directories(${GLEW_INCLUDE_DIRS})
@@ -153,6 +159,7 @@ target_include_directories(STNKS_CORE
     PUBLIC ${GLM_INCLUDE_DIRS})
 
 target_link_libraries(STNKS_CORE
+    PUBLIC Threads::Threads
     PUBLIC ${SDL2_LIBRARIES}
     PUBLIC GLEW::GLEW
     PUBLIC glm::glm
@@ -161,4 +168,10 @@ target_link_libraries(STNKS_CORE
     PUBLIC cpr::cpr
     PUBLIC nlohmann_json::nlohmann_json
     PUBLIC unofficial::sqlite3::sqlite3
-    PUBLIC httplib::httplib)
+    PUBLIC httplib::httplib
+    PUBLIC unofficial::enet::enet)
+
+# std::filesystem needs explicit linking on GCC < 9
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS "9.0")
+    target_link_libraries(STNKS_CORE PUBLIC stdc++fs)
+endif()

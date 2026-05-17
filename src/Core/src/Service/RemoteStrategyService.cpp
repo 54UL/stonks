@@ -10,6 +10,26 @@ namespace stnks
         : http_(http), serverUrl_(serverUrl)
     {
         spdlog::info("[RemoteService] Connecting to {}", serverUrl_);
+
+        // Connect ENet feed client to server for real-time market data + heartbeat
+        std::string host = ExtractHost();
+        feedClient_.Connect(host);
+    }
+
+    RemoteStrategyService::~RemoteStrategyService()
+    {
+        feedClient_.Disconnect();
+    }
+
+    std::string RemoteStrategyService::ExtractHost() const
+    {
+        // Parse "http://host:port" or "host:port" → "host"
+        std::string s = serverUrl_;
+        auto pos = s.find("://");
+        if (pos != std::string::npos) s = s.substr(pos + 3);
+        pos = s.find(':');
+        if (pos != std::string::npos) s = s.substr(0, pos);
+        return s;
     }
 
     // ── Strategy CRUD ────────────────────────────────────────────────────────────
@@ -35,9 +55,10 @@ namespace stnks
         return resp.Ok();
     }
 
-    bool RemoteStrategyService::CancelStrategy(int64_t id)
+    bool RemoteStrategyService::CancelStrategy(int64_t id, float exitPrice)
     {
-        auto resp = http_.Post(serverUrl_ + "/api/strategies/" + std::to_string(id) + "/cancel", "{}");
+        std::string body = "{\"exit_price\":" + std::to_string(exitPrice) + "}";
+        auto resp = http_.Post(serverUrl_ + "/api/strategies/" + std::to_string(id) + "/cancel", body);
         return resp.Ok();
     }
 
@@ -98,21 +119,47 @@ namespace stnks
 
     bool RemoteStrategyService::IsConnected() const
     {
-        auto resp = const_cast<HttpClient&>(http_).Get(serverUrl_ + "/api/status");
-        lastConnected_ = resp.Ok();
-        return lastConnected_;
+        return feedClient_.IsConnected();
     }
 
     bool RemoteStrategyService::IsMonitoring() const
     {
-        auto resp = const_cast<HttpClient&>(http_).Get(serverUrl_ + "/api/status");
-        if (!resp.Ok()) return false;
-        try
-        {
-            auto j = json::parse(resp.body);
-            return j.value("monitoring", false);
-        }
-        catch (...) { return false; }
+        // Never block the UI — return cached value and refresh in background
+        if (!feedClient_.IsConnected())
+            return false;
+
+        auto now = std::chrono::steady_clock::now();
+        float elapsed = std::chrono::duration<float>(now - lastStatusPoll_).count();
+
+        // Poll at most every 5 seconds, and only one request in flight at a time
+        if (elapsed > 5.f && !statusPollInFlight_.load())
+            const_cast<RemoteStrategyService*>(this)->PollStatusAsync();
+
+        return cachedMonitoring_.load();
+    }
+
+    void RemoteStrategyService::PollStatusAsync()
+    {
+        statusPollInFlight_ = true;
+        lastStatusPoll_ = std::chrono::steady_clock::now();
+
+        http_.GetThreads().Submit([this]() {
+            auto resp = http_.Get(serverUrl_ + "/api/status");
+            if (resp.Ok())
+            {
+                try
+                {
+                    auto j = json::parse(resp.body);
+                    cachedMonitoring_      = j.value("monitoring", false);
+                    cachedServerRequests_  = j.value("requests_served", (int64_t)0);
+                    cachedServerTicks_     = j.value("ticks_broadcast", (int64_t)0);
+                    cachedServerClients_   = j.value("clients", 0);
+                    cachedServerUptime_    = j.value("uptime_sec", 0);
+                }
+                catch (...) {}
+            }
+            statusPollInFlight_ = false;
+        });
     }
 
     // ── JSON helpers ─────────────────────────────────────────────────────────────
@@ -135,6 +182,9 @@ namespace stnks
         j["priority"]    = s.priority;
         j["quantity"]    = s.quantity;
         j["entryDate"]   = s.entryDate;
+        j["exitPrice"]   = s.exitPrice;
+        j["closedPnl"]   = s.closedPnlPct;
+        j["enabled"]     = s.enabled;
         return j.dump();
     }
 
@@ -159,6 +209,9 @@ namespace stnks
             s.priority    = j.value("priority", 0);
             s.quantity    = j.value("quantity", 0.f);
             s.entryDate   = j.value("entryDate", (int64_t)0);
+            s.exitPrice   = j.value("exitPrice", 0.f);
+            s.closedPnlPct = j.value("closedPnl", 0.f);
+            s.enabled      = j.value("enabled", true);
         }
         catch (const std::exception& e)
         {
@@ -241,6 +294,13 @@ namespace stnks
             spdlog::error("[RemoteService] Symbol matches parse error: {}", e.what());
         }
         return result;
+    }
+
+    // ── ENet live price ────────────────────────────────────────────────────────
+
+    float RemoteStrategyService::GetLivePrice(const std::string& symbol) const
+    {
+        return feedClient_.GetLivePrice(symbol);
     }
 
 } // namespace stnks

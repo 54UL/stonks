@@ -92,12 +92,6 @@ namespace stnks {
     void Engine::Init() {
         ConfigResource();
 
-        // resourceCache_ = std::make_shared<ResourceCache>();
-        // const std::string shadersPath = globals_->GetWorkingFolder()
-        //                                 + globals_->Get(gk::prefix::PATHS, gk::key::PATH_SHADERS);
-        // resourceCache_->Init(shadersPath);
-        // RegisterDependency(ResourceCache, resourceCache_);
-
         auto mainWindowSize = appInstance_->GetMainWindowSize();
         renderEngine_.SetScreenSize(mainWindowSize.x, mainWindowSize.y);
 

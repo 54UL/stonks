@@ -10,7 +10,8 @@ namespace stnks
 {
     HttpApiServer::HttpApiServer(StrategyStore& store, MarketService& market,
                                   StrategyServer* server, const Config& config)
-        : config_(config), store_(store), market_(market), server_(server)
+        : config_(config), store_(store), market_(market), server_(server),
+          feedServer_(config.feed)
     {
         httpServer_ = std::make_unique<httplib::Server>();
         SetupRoutes();
@@ -31,6 +32,9 @@ namespace stnks
         if (running_) return;
         running_ = true;
 
+        // Start ENet market feed server
+        feedServer_.Start();
+
         thread_ = std::thread([this]() {
             spdlog::info("[HttpApi] Listening on {}:{}", config_.host, config_.port);
             httpServer_->listen(config_.host, config_.port);
@@ -41,11 +45,26 @@ namespace stnks
 
     void HttpApiServer::Stop()
     {
+        feedServer_.Stop();
         if (httpServer_)
             httpServer_->stop();
         if (thread_.joinable())
             thread_.join();
         running_ = false;
+    }
+
+    void HttpApiServer::BroadcastTick(const std::string& symbol, float price,
+                                       float open, float high, float low, float volume, int64_t timestamp)
+    {
+        ticksBroadcast_++;
+        NetTickPayload tick;
+        tick.price     = price;
+        tick.open      = open;
+        tick.high      = high;
+        tick.low       = low;
+        tick.volume    = volume;
+        tick.timestamp = timestamp;
+        feedServer_.BroadcastTick(symbol, tick);
     }
 
     // ── Routes ───────────────────────────────────────────────────────────────────
@@ -54,12 +73,25 @@ namespace stnks
     {
         auto& svr = *httpServer_;
 
+        // Count all requests
+        svr.set_pre_routing_handler([this](const httplib::Request&, httplib::Response&) {
+            requestCount_++;
+            return httplib::Server::HandlerResponse::Unhandled;
+        });
+
         // GET /api/status
         svr.Get("/api/status", [this](const httplib::Request&, httplib::Response& res) {
+            auto uptime = std::chrono::steady_clock::now() - startTime_;
+            int64_t uptimeSec = std::chrono::duration_cast<std::chrono::seconds>(uptime).count();
+
             json j;
             j["ok"] = true;
             j["monitoring"] = server_ ? server_->IsRunning() : false;
             j["timestamp"] = std::time(nullptr);
+            j["clients"] = feedServer_.GetClientCount();
+            j["uptime_sec"] = uptimeSec;
+            j["requests_served"] = requestCount_.load();
+            j["ticks_broadcast"] = ticksBroadcast_.load();
             res.set_content(j.dump(), "application/json");
         });
 
@@ -140,7 +172,18 @@ namespace stnks
         // POST /api/strategies/:id/cancel
         svr.Post(R"(/api/strategies/(\d+)/cancel)", [this](const httplib::Request& req, httplib::Response& res) {
             int64_t id = std::stoll(req.matches[1]);
-            bool ok = store_.MarkTriggered(id, StrategyStatus::Cancelled, std::time(nullptr));
+            float exitPrice = 0.f;
+            float closedPnl = 0.f;
+            try {
+                auto body = json::parse(req.body);
+                if (body.contains("exit_price")) exitPrice = body["exit_price"].get<float>();
+            } catch (...) {}
+            if (exitPrice > 0.f) {
+                auto s = store_.GetById(id);
+                if (s.entryPrice > 0.f)
+                    closedPnl = s.UnrealizedPnLPercent(exitPrice);
+            }
+            bool ok = store_.MarkTriggered(id, StrategyStatus::Cancelled, std::time(nullptr), exitPrice, closedPnl);
             json j;
             j["ok"] = ok;
             j["id"] = id;
@@ -200,6 +243,9 @@ namespace stnks
         j["priority"]    = s.priority;
         j["quantity"]    = s.quantity;
         j["entryDate"]   = s.entryDate;
+        j["exitPrice"]   = s.exitPrice;
+        j["closedPnl"]   = s.closedPnlPct;
+        j["enabled"]     = s.enabled;
         return j.dump();
     }
 
@@ -232,6 +278,9 @@ namespace stnks
             if (j.contains("priority"))    s.priority    = j["priority"].get<int>();
             if (j.contains("quantity"))    s.quantity    = j["quantity"].get<float>();
             if (j.contains("entryDate"))   s.entryDate   = j["entryDate"].get<int64_t>();
+            if (j.contains("exitPrice"))   s.exitPrice   = j["exitPrice"].get<float>();
+            if (j.contains("closedPnl"))   s.closedPnlPct = j["closedPnl"].get<float>();
+            if (j.contains("enabled"))     s.enabled      = j["enabled"].get<bool>();
         }
         catch (const std::exception& e)
         {

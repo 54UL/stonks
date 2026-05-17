@@ -109,9 +109,13 @@ namespace stnks
         }
 
         ss << "\n## Instructions\n"
-           << "Provide your analysis as JSON with two arrays:\n"
+           << "Provide your analysis as JSON with three arrays:\n"
            << "1. \"recommendations\" - actionable trade ideas (title + body)\n"
            << "2. \"warnings\" - risk alerts or negative signals (title + body + severity: info/warning/alert)\n"
+           << "3. \"operations\" - specific trade actions on existing positions:\n"
+           << "   Each operation: {strategy_id, action: hold/buy/sell/adjust_tp/adjust_sl, "
+           << "urgency: info/warning/alert, reason, suggested_price, confidence: 0-1}\n"
+           << "   strategy_id=0 means a new position suggestion.\n"
            << "Keep each item concise (1-2 sentences).\n";
 
         return ss.str();
@@ -172,6 +176,34 @@ namespace stnks
                     else                        insight.severity = InsightSeverity::Info;
 
                     result.warnings.push_back(std::move(insight));
+                }
+            }
+
+            if (analysis.contains("operations"))
+            {
+                for (auto& o : analysis["operations"])
+                {
+                    AIOperation op;
+                    op.symbol     = symbol;
+                    op.strategyId = o.value("strategy_id", (int64_t)0);
+                    op.reason     = o.value("reason", "");
+                    op.suggestedPrice = o.value("suggested_price", 0.f);
+                    op.confidence = o.value("confidence", 0.5f);
+                    op.timestamp  = now;
+
+                    std::string action = o.value("action", "hold");
+                    if (action == "buy")          op.type = OperationType::Buy;
+                    else if (action == "sell")    op.type = OperationType::Sell;
+                    else if (action == "adjust_tp") op.type = OperationType::AdjustTP;
+                    else if (action == "adjust_sl") op.type = OperationType::AdjustSL;
+                    else                          op.type = OperationType::Hold;
+
+                    std::string urg = o.value("urgency", "info");
+                    if (urg == "alert")          op.urgency = InsightSeverity::Alert;
+                    else if (urg == "warning")   op.urgency = InsightSeverity::Warning;
+                    else                         op.urgency = InsightSeverity::Info;
+
+                    result.operations.push_back(std::move(op));
                 }
             }
         }

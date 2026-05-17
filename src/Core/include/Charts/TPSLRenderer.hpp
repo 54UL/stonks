@@ -15,7 +15,8 @@ namespace stnks
         // ── Draw strategy visualization ─────────────────────────────────────
 
         void Draw(ImDrawList* drawList, const ChartViewport& vp,
-                  const Strategy& strategy, bool editing) override
+                  const Strategy& strategy, bool editing,
+                  const std::vector<Candle>* candles = nullptr) override
         {
             float top    = std::max({strategy.takeProfit, strategy.entryPrice, strategy.stopLoss});
             float bottom = std::min({strategy.stopLoss, strategy.entryPrice, strategy.takeProfit});
@@ -26,7 +27,8 @@ namespace stnks
             float yTP    = vp.PriceToY(strategy.takeProfit);
             float ySL    = vp.PriceToY(strategy.stopLoss);
 
-            float left  = vp.chartOrigin.x;
+            // Start rendering from entry position on the chart
+            float left  = ResolveEntryX(vp, candles, strategy);
             float right = vp.chartOrigin.x + vp.chartSize.x;
 
             bool active    = strategy.status == StrategyStatus::Active;

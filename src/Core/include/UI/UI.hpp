@@ -11,6 +11,7 @@
 #include <News/NewsService.hpp>
 #include <AI/IMarketAnalyzer.hpp>
 #include <AI/ClaudeAnalyzer.hpp>
+#include <Charts/StrategyWizard.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <memory>
@@ -37,10 +38,13 @@ namespace stnks
         void ShowDashboard();
         void ShowThreadsDebugger();
         void ShowStockCharts();
+        void ShowStrategyWizard();
         void ShowSymbolSelector();
         void ShowStrategies();
+        void ShowPortfolio();
         void ShowRecommendations();
         void ShowMarketWarnings();
+        void ShowAIOperations();
         void DrainAsyncResults();
         void CheckStrategyTriggers();
         void RefreshInsights();
@@ -54,9 +58,13 @@ namespace stnks
         bool showDashboard_       = true;
         bool showThreadsDebugger_ = false;
         bool showStockCharts_     = true;
+        bool showStrategyWizard_  = true;
         bool showStrategies_      = true;
+        bool showPortfolio_       = true;
         bool showRecommendations_ = true;
         bool showMarketWarnings_  = true;
+        bool showAIOperations_    = true;
+        bool dockLayoutBuilt_     = false;
 
         // Market data
         std::unique_ptr<HttpClient>    httpClient_;
@@ -66,6 +74,9 @@ namespace stnks
 
         // Strategy service (local or remote)
         std::unique_ptr<IStrategyService> service_;
+
+        // Dockable strategy wizard (always-open panel)
+        StrategyWizard wizard_;
 
         // Strategy cache
         std::vector<Strategy>          cachedStrategies_;
@@ -87,7 +98,7 @@ namespace stnks
         int64_t           lastClickedId_ = -1;    // For shift-click range select
 
         // Sorting
-        enum class SortColumn { None, Symbol, Type, Dir, Entry, TP, SL, Qty, RR, PnL, Status, Notes };
+        enum class SortColumn { None, Symbol, Type, Dir, Entry, TP, SL, Qty, RR, PnL, Exit, Status, Notes };
         SortColumn tableSortCol_   = SortColumn::None;
         bool       tableSortAsc_   = true;
 
@@ -110,9 +121,13 @@ namespace stnks
         std::unique_ptr<ClaudeAnalyzer> analyzer_;
         std::vector<MarketInsight>      cachedRecommendations_;
         std::vector<MarketInsight>      cachedWarnings_;
+        std::vector<AIOperation>        cachedOperations_;
         float                           insightRefreshTimer_ = 0.f;
         float                           insightRefreshInterval_ = 300.f; // 5 min
         bool                            insightsLoading_ = false;
+
+        // AI auto-trade toggle (persisted in globals)
+        bool                            aiAutoTrade_ = false;
 
         // Timeframe definitions (interval → Yahoo API params)
         struct Timeframe
@@ -145,6 +160,7 @@ namespace stnks
             bool         refreshing = false;  // Background refresh (keeps showing old chart)
             bool         open       = true;
             int          timeframeIdx = kDefaultTimeframe;
+            float        refreshTimer = 0.f;  // Per-panel adaptive refresh countdown
         };
         std::vector<ChartPanel> charts_;
 
@@ -154,6 +170,18 @@ namespace stnks
         bool  searchPending_                 = false;
         float searchDebounceTimer_           = 0.f;
         std::string lastSearchQuery_;
+
+        // Telemetry counters
+        struct Telemetry
+        {
+            int64_t marketFetches    = 0;
+            int64_t strategySaves    = 0;
+            int64_t strategyDeletes  = 0;
+            int64_t chartRefreshes   = 0;
+            float   uptimeSec        = 0.f;
+            float   avgFrameMs       = 0.f;
+        };
+        Telemetry telemetry_;
 
         // Preset symbols
         static constexpr const char* kPresetUS[]  = {"AAPL", "MSFT", "TSLA", "NVDA", "AMZN", "GOOGL"};

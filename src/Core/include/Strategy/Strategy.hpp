@@ -22,7 +22,8 @@ namespace stnks
     enum class StrategyType : int
     {
         TPSL     = 0,  // Classic take-profit / stop-loss
-        Position = 1   // Track an open position (entry tracking, P&L, news)
+        Position = 1,  // Track an open position (entry tracking, P&L, news)
+        AI       = 2   // AI-managed: news analysis → auto-trade or operations/warnings
     };
 
     struct Strategy
@@ -47,9 +48,18 @@ namespace stnks
         float              quantity    = 0.f;   // Number of shares/contracts
         int64_t            entryDate   = 0;     // When the position was opened
 
+        // Close tracking: recorded when position is closed/cancelled/triggered
+        float              exitPrice      = 0.f;   // Price at which position was exited
+        float              closedPnlPct   = 0.f;   // Frozen P/L% at close time
+
+        // Enable/disable: disabled strategies are not monitored but still shown
+        bool               enabled        = true;
+
         bool IsActive() const { return status == StrategyStatus::Active; }
+        bool IsEnabled() const { return enabled; }
         bool IsPosition() const { return type == StrategyType::Position; }
         bool IsTPSL() const { return type == StrategyType::TPSL; }
+        bool IsAI() const { return type == StrategyType::AI; }
 
         // Risk/reward ratio (TPSL only)
         float RiskReward() const
@@ -114,6 +124,7 @@ namespace stnks
         {
         case StrategyType::TPSL:     return "TP/SL";
         case StrategyType::Position: return "Position";
+        case StrategyType::AI:       return "AI";
         }
         return "Unknown";
     }

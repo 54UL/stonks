@@ -76,6 +76,14 @@ namespace stnks
         using SentimentCallback = std::function<void(const AnalysisResult&)>;
         void SetSentimentCallback(SentimentCallback cb) { sentimentCallback_ = std::move(cb); }
 
+        // Callback when market data is fetched (for broadcasting ticks)
+        using TickCallback = std::function<void(const std::string& symbol, const StockQuote& quote)>;
+        void SetTickCallback(TickCallback cb) { tickCallback_ = std::move(cb); }
+
+        // Callback invoked during idle sleep (for polling ENet, etc.)
+        using IdleCallback = std::function<void()>;
+        void SetIdleCallback(IdleCallback cb) { idleCallback_ = std::move(cb); }
+
     private:
         void PollAndCheck();
         void CheckStrategies(const std::string& symbol, const StockQuote& quote);
@@ -104,7 +112,12 @@ namespace stnks
         SentimentCallback sentimentCallback_;
         std::chrono::steady_clock::time_point lastSentimentCheck_{};
 
+        // Market tick broadcast
+        TickCallback tickCallback_;
+        IdleCallback idleCallback_;
+
         std::atomic<bool> running_{false};
+        int lastEffectiveInterval_ = 0; // For logging interval changes
     };
 
 } // namespace stnks

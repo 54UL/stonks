@@ -20,13 +20,14 @@ namespace stnks
         void SetCurrentPrice(float price) { currentPrice_ = price; }
 
         void Draw(ImDrawList* drawList, const ChartViewport& vp,
-                  const Strategy& strategy, bool editing) override
+                  const Strategy& strategy, bool editing,
+                  const std::vector<Candle>* candles = nullptr) override
         {
             if (strategy.entryPrice < vp.priceMin || strategy.entryPrice > vp.priceMax)
                 return;
 
             float yEntry = vp.PriceToY(strategy.entryPrice);
-            float left   = vp.chartOrigin.x;
+            float left   = ResolveEntryX(vp, candles, strategy);
             float right  = vp.chartOrigin.x + vp.chartSize.x;
 
             bool active = strategy.IsActive();

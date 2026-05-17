@@ -109,11 +109,14 @@ namespace stnks
         const unsigned char* notes = sqlite3_column_text(stmt, 9);
         if (notes) s.notes = reinterpret_cast<const char*>(notes);
 
-        s.type      = static_cast<StrategyType>(sqlite3_column_int(stmt, 10));
-        s.parentId  = sqlite3_column_int64(stmt, 11);
-        s.priority  = sqlite3_column_int(stmt, 12);
-        s.quantity  = static_cast<float>(sqlite3_column_double(stmt, 13));
-        s.entryDate = sqlite3_column_int64(stmt, 14);
+        s.type         = static_cast<StrategyType>(sqlite3_column_int(stmt, 10));
+        s.parentId     = sqlite3_column_int64(stmt, 11);
+        s.priority     = sqlite3_column_int(stmt, 12);
+        s.quantity     = static_cast<float>(sqlite3_column_double(stmt, 13));
+        s.entryDate    = sqlite3_column_int64(stmt, 14);
+        s.exitPrice    = static_cast<float>(sqlite3_column_double(stmt, 15));
+        s.closedPnlPct = static_cast<float>(sqlite3_column_double(stmt, 16));
+        s.enabled      = sqlite3_column_int(stmt, 17) != 0;
 
         return s;
     }
@@ -143,6 +146,9 @@ namespace stnks
         sqlite3_bind_int(stmt, 12, s.priority);
         sqlite3_bind_double(stmt, 13, s.quantity);
         sqlite3_bind_int64(stmt, 14, s.entryDate ? s.entryDate : s.createdAt);
+        sqlite3_bind_double(stmt, 15, s.exitPrice);
+        sqlite3_bind_double(stmt, 16, s.closedPnlPct);
+        sqlite3_bind_int(stmt, 17, s.enabled ? 1 : 0);
 
         int64_t id = -1;
         if (sqlite3_step(stmt) == SQLITE_DONE)
@@ -176,7 +182,10 @@ namespace stnks
         sqlite3_bind_int(stmt, 12, s.priority);
         sqlite3_bind_double(stmt, 13, s.quantity);
         sqlite3_bind_int64(stmt, 14, s.entryDate);
-        sqlite3_bind_int64(stmt, 15, s.id);
+        sqlite3_bind_double(stmt, 15, s.exitPrice);
+        sqlite3_bind_double(stmt, 16, s.closedPnlPct);
+        sqlite3_bind_int(stmt, 17, s.enabled ? 1 : 0);
+        sqlite3_bind_int64(stmt, 18, s.id);
 
         bool ok = sqlite3_step(stmt) == SQLITE_DONE;
         if (!ok) spdlog::error("[StrategyStore] Update failed: {}", sqlite3_errmsg(db_));
@@ -284,7 +293,8 @@ namespace stnks
         return result;
     }
 
-    bool StrategyStore::MarkTriggered(int64_t id, StrategyStatus status, int64_t triggeredAt)
+    bool StrategyStore::MarkTriggered(int64_t id, StrategyStatus status, int64_t triggeredAt,
+                                      float exitPrice, float closedPnlPct)
     {
         if (!db_) return false;
 
@@ -294,7 +304,9 @@ namespace stnks
 
         sqlite3_bind_int(stmt, 1, static_cast<int>(status));
         sqlite3_bind_int64(stmt, 2, triggeredAt);
-        sqlite3_bind_int64(stmt, 3, id);
+        sqlite3_bind_double(stmt, 3, exitPrice);
+        sqlite3_bind_double(stmt, 4, closedPnlPct);
+        sqlite3_bind_int64(stmt, 5, id);
 
         bool ok = sqlite3_step(stmt) == SQLITE_DONE;
         sqlite3_finalize(stmt);

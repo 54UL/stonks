@@ -1,10 +1,15 @@
 #include <UI/UI.hpp>
 #include <Charts/StrategyLayer.hpp>
+#include <Market/MarketHours.hpp>
 #include <Service/LocalStrategyService.hpp>
 #include <Service/RemoteStrategyService.hpp>
+#include <Dependencies/Globals.hpp>
+#include <GlobalKeys.hpp>
 #include <portable-file-dialogs.h>
 #include <spdlog/spdlog.h>
 #include <algorithm>
+#include <unordered_map>
+#include <cmath>
 #include <ctime>
 #include <cstdlib>
 #include <cstdio>
@@ -21,6 +26,16 @@ namespace stnks
         style.FrameRounding     = 2.0f;
         style.GrabRounding      = 2.0f;
         style.ScrollbarRounding = 4.0f;
+        style.TabRounding       = 3.0f;
+        style.DockingSeparatorSize = 2.0f;
+
+        // When viewports are enabled, undocked windows are native OS windows — no rounding
+        ImGuiIO& io = ImGui::GetIO();
+        if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+        {
+            style.WindowRounding = 0.0f;
+            style.Colors[ImGuiCol_WindowBg].w = 1.0f; // Opaque bg for OS windows
+        }
 
         ImVec4* colors = style.Colors;
         colors[ImGuiCol_WindowBg]       = ImVec4(0.08f, 0.08f, 0.10f, 1.00f);
@@ -32,12 +47,20 @@ namespace stnks
         colors[ImGuiCol_Button]         = ImVec4(0.15f, 0.18f, 0.25f, 1.00f);
         colors[ImGuiCol_ButtonHovered]  = ImVec4(0.20f, 0.28f, 0.40f, 1.00f);
         colors[ImGuiCol_Tab]            = ImVec4(0.10f, 0.12f, 0.18f, 1.00f);
+        colors[ImGuiCol_TabHovered]     = ImVec4(0.22f, 0.28f, 0.40f, 1.00f);
+        colors[ImGuiCol_TabActive]      = ImVec4(0.16f, 0.20f, 0.30f, 1.00f);
+        colors[ImGuiCol_DockingPreview] = ImVec4(0.22f, 0.35f, 0.55f, 0.70f);
+        colors[ImGuiCol_DockingEmptyBg] = ImVec4(0.06f, 0.06f, 0.08f, 1.00f);
+        colors[ImGuiCol_Separator]      = ImVec4(0.18f, 0.20f, 0.28f, 1.00f);
+        colors[ImGuiCol_SeparatorHovered] = ImVec4(0.25f, 0.35f, 0.55f, 1.00f);
+        colors[ImGuiCol_SeparatorActive]  = ImVec4(0.30f, 0.45f, 0.65f, 1.00f);
 
         httpClient_    = std::make_unique<HttpClient>(engine_->threadRegistry_);
         marketService_ = std::make_unique<MarketService>(*httpClient_, engine_->threadRegistry_);
 
         // Strategy service: check STNKS_SERVER_URL env for remote mode, else monolith
         const char* serverUrl = std::getenv("STNKS_SERVER_URL");
+        if (serverUrl==nullptr) serverUrl = "localhost:8099";
         if (serverUrl && serverUrl[0] != '\0')
         {
             service_ = std::make_unique<RemoteStrategyService>(*httpClient_, serverUrl);
@@ -66,6 +89,13 @@ namespace stnks
         if (claudeKey) aiConfig.apiKey = claudeKey;
         analyzer_ = std::make_unique<ClaudeAnalyzer>(*httpClient_, aiConfig);
 
+        // Load persisted AI settings from globals
+        if (engine_->globals_)
+        {
+            std::string val = engine_->globals_->Get(gk::prefix::STATE, gk::key::AI_AUTO_TRADE);
+            aiAutoTrade_ = (val == "1");
+        }
+
         spdlog::info("[UI] Initialized");
     }
 
@@ -74,6 +104,7 @@ namespace stnks
     void UI::DrainAsyncResults()
     {
         marketService_->DrainQuoteResults([this](QuoteFetchResult&& result) {
+            telemetry_.chartRefreshes++;
             for (auto& panel : charts_)
             {
                 // Background refresh — just update data, keep layers intact
@@ -100,6 +131,7 @@ namespace stnks
                     stratLayer.onStrategyChanged = [this](const Strategy& s, bool isNew) {
                         if (isNew)
                         {
+                            telemetry_.strategySaves++;
                             int64_t id = service_->InsertStrategy(s);
                             if (id > 0)
                                 spdlog::info("[Strategy] Created #{} for {} (type={} entry={:.2f})",
@@ -127,7 +159,11 @@ namespace stnks
                     };
 
                     stratLayer.onStrategyCancelled = [this](int64_t id) {
-                        service_->CancelStrategy(id);
+                        // Find strategy symbol to get exit price
+                        float exitPrice = 0.f;
+                        for (auto& s : cachedStrategies_)
+                            if (s.id == id) { exitPrice = GetCurrentPrice(s.symbol); break; }
+                        service_->CancelStrategy(id, exitPrice);
                         strategiesDirty_ = true;
                         spdlog::info("[Strategy] Cancelled #{}", id);
                     };
@@ -142,6 +178,17 @@ namespace stnks
                         tableSelection_.clear();
                         tableSelection_.insert(id);
                         lastClickedId_ = id;
+
+                        // Also open in the dockable wizard panel
+                        for (auto& s : cachedStrategies_)
+                        {
+                            if (s.id == id)
+                            {
+                                wizard_.OpenEdit(s);
+                                showStrategyWizard_ = true;
+                                break;
+                            }
+                        }
 
                         spdlog::info("[Strategy] Selected #{} for editing", id);
                     };
@@ -202,8 +249,17 @@ namespace stnks
             for (auto& w : result.warnings)
                 cachedWarnings_.push_back(std::move(w));
 
-            spdlog::info("[AI] Got {} recs + {} warnings for '{}'",
-                         result.recommendations.size(), result.warnings.size(), result.symbol);
+            // Collect operations (replace per-symbol)
+            cachedOperations_.erase(
+                std::remove_if(cachedOperations_.begin(), cachedOperations_.end(),
+                    [&](const AIOperation& op) { return op.symbol == result.symbol; }),
+                cachedOperations_.end());
+            for (auto& op : result.operations)
+                cachedOperations_.push_back(std::move(op));
+
+            spdlog::info("[AI] Got {} recs + {} warnings + {} ops for '{}'",
+                         result.recommendations.size(), result.warnings.size(),
+                         result.operations.size(), result.symbol);
         });
     }
 
@@ -290,35 +346,50 @@ namespace stnks
     {
         DrainAsyncResults();
 
-        // Auto-refresh market data timer
-        if (marketRefreshInterval_ > 0.f && !charts_.empty())
+        // Auto-refresh market data — per-panel adaptive intervals
+        if (!charts_.empty())
         {
-            marketRefreshTimer_ -= ImGui::GetIO().DeltaTime;
-            if (marketRefreshTimer_ <= 0.f)
+            float dt = ImGui::GetIO().DeltaTime;
+            for (auto& panel : charts_)
             {
-                for (auto& panel : charts_)
+                if (panel.loading || panel.refreshing || panel.quote.candles.empty())
+                    continue;
+
+                // Determine effective interval: market hours aware
+                float effectiveInterval = (float)MarketHours::GetPollInterval(panel.symbol);
+                // Allow user override (manual refresh rate) as minimum floor
+                effectiveInterval = std::max(effectiveInterval, marketRefreshInterval_);
+
+                panel.refreshTimer -= dt;
+                if (panel.refreshTimer <= 0.f)
                 {
-                    if (!panel.loading && !panel.refreshing && !panel.quote.candles.empty())
-                    {
-                        auto& tf = kTimeframes[panel.timeframeIdx];
-                        panel.refreshing = true;
-                        marketService_->FetchQuoteAsync(panel.symbol, tf.interval, tf.range);
-                    }
+                    auto& tf = kTimeframes[panel.timeframeIdx];
+                    panel.refreshing = true;
+                    marketService_->FetchQuoteAsync(panel.symbol, tf.interval, tf.range);
+                    panel.refreshTimer = effectiveInterval;
                 }
-                marketRefreshTimer_ = marketRefreshInterval_;
             }
+            // Update global timer display (show minimum across panels)
+            float minTimer = 9999.f;
+            for (auto& p : charts_)
+                if (p.refreshTimer < minTimer) minTimer = p.refreshTimer;
+            marketRefreshTimer_ = minTimer;
         }
 
-        // Auto-refresh strategy timer
+        // Auto-refresh strategy timer (skip when disconnected to avoid blocking)
         strategyRefreshTimer_ -= ImGui::GetIO().DeltaTime;
-        if (strategyRefreshTimer_ <= 0.f)
+        if (strategyRefreshTimer_ <= 0.f && service_->IsConnected())
         {
             strategiesDirty_ = true;
             strategyRefreshTimer_ = strategyRefreshInterval_;
         }
+        else if (strategyRefreshTimer_ <= 0.f)
+        {
+            strategyRefreshTimer_ = 2.f; // Retry check in 2s when disconnected
+        }
 
-        // Reload strategies from DB if dirty
-        if (strategiesDirty_)
+        // Reload strategies from service if dirty (skip if disconnected to avoid blocking)
+        if (strategiesDirty_ && service_->IsConnected())
         {
             cachedStrategies_ = service_->GetAllStrategies();
             strategiesDirty_  = false;
@@ -343,9 +414,17 @@ namespace stnks
                 if (s.symbol == panel.symbol)
                     forSymbol.push_back(s);
             panel.chart.SetStrategies(forSymbol);
+
+            // Set current price for position P&L rendering
+            auto* sl = panel.chart.GetStrategyLayer();
+            if (sl)
+                sl->SetCurrentPrice(GetCurrentPrice(panel.symbol));
         }
 
         ShowDockSpace();
+
+        // Reset wizard click detection for this frame
+        wizard_.BeginFrame();
 
         if (showDashboard_)
             ShowDashboard();
@@ -353,12 +432,18 @@ namespace stnks
             ShowThreadsDebugger();
         if (showStockCharts_)
             ShowStockCharts();
+        if (showStrategyWizard_)
+            ShowStrategyWizard();
         if (showStrategies_)
             ShowStrategies();
+        if (showPortfolio_)
+            ShowPortfolio();
         if (showRecommendations_)
             ShowRecommendations();
         if (showMarketWarnings_)
             ShowMarketWarnings();
+        if (showAIOperations_)
+            ShowAIOperations();
     }
 
     // ── Dock Space & Menu ──────────────────────────────────────────────────────
@@ -389,6 +474,57 @@ namespace stnks
         ImGuiID dockspaceId = ImGui::GetID("StnksDockSpace");
         ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
 
+        // Build default layout on first run (matches UILAYOUT.png)
+        if (!dockLayoutBuilt_)
+        {
+            dockLayoutBuilt_ = true;
+            ImGui::DockBuilderRemoveNode(dockspaceId);
+            ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
+            ImGui::DockBuilderSetNodeSize(dockspaceId, viewport->WorkSize);
+
+            // ┌──────────┬────────────────────────┬──────────────┐
+            // │Dashboard │ Stock Charts            │Strategy Wiz  │
+            // │          │                         │              │
+            // │          │                         ├──────────────┤
+            // │          │                         │Recom|Warn|AI │
+            // │          ├────────────────────────┤              │
+            // │          │ Strategies | Portfolio  │              │
+            // └──────────┴────────────────────────┴──────────────┘
+
+            // Split: left (18%) | rest
+            ImGuiID dockLeft, dockRest;
+            ImGui::DockBuilderSplitNode(dockspaceId, ImGuiDir_Left, 0.18f, &dockLeft, &dockRest);
+
+            // Split rest: center | right (22%)
+            ImGuiID dockCenter, dockRight;
+            ImGui::DockBuilderSplitNode(dockRest, ImGuiDir_Right, 0.22f, &dockRight, &dockCenter);
+
+            // Split center: top (charts, 62%) | bottom (strategies/portfolio, 38%)
+            ImGuiID dockCenterTop, dockCenterBottom;
+            ImGui::DockBuilderSplitNode(dockCenter, ImGuiDir_Down, 0.38f, &dockCenterBottom, &dockCenterTop);
+
+            // Split right: top (wizard, 55%) | bottom (AI panels, 45%)
+            ImGuiID dockRightTop, dockRightBottom;
+            ImGui::DockBuilderSplitNode(dockRight, ImGuiDir_Down, 0.45f, &dockRightBottom, &dockRightTop);
+
+            // Assign windows to docks
+            ImGui::DockBuilderDockWindow("Dashboard",        dockLeft);
+            ImGui::DockBuilderDockWindow("Threads Debugger", dockLeft);      // tabbed behind Dashboard
+
+            ImGui::DockBuilderDockWindow("Stock Charts",     dockCenterTop);
+
+            ImGui::DockBuilderDockWindow("Strategies",       dockCenterBottom);
+            ImGui::DockBuilderDockWindow("Portfolio",         dockCenterBottom); // tabbed
+
+            ImGui::DockBuilderDockWindow("Strategy Wizard",  dockRightTop);
+
+            ImGui::DockBuilderDockWindow("Recommendations",  dockRightBottom);
+            ImGui::DockBuilderDockWindow("Market Warnings",  dockRightBottom); // tabbed
+            ImGui::DockBuilderDockWindow("AI Operations",    dockRightBottom); // tabbed
+
+            ImGui::DockBuilderFinish(dockspaceId);
+        }
+
         ShowMenuBar();
 
         ImGui::End();
@@ -410,11 +546,28 @@ namespace stnks
             {
                 ImGui::MenuItem("Dashboard", nullptr, &showDashboard_);
                 ImGui::MenuItem("Stock Charts", nullptr, &showStockCharts_);
+                ImGui::MenuItem("Strategy Wizard", nullptr, &showStrategyWizard_);
                 ImGui::MenuItem("Strategies", nullptr, &showStrategies_);
+                ImGui::MenuItem("Portfolio", nullptr, &showPortfolio_);
                 ImGui::MenuItem("Recommendations", nullptr, &showRecommendations_);
                 ImGui::MenuItem("Market Warnings", nullptr, &showMarketWarnings_);
+                ImGui::MenuItem("AI Operations", nullptr, &showAIOperations_);
                 ImGui::Separator();
                 ImGui::MenuItem("Threads Debugger", nullptr, &showThreadsDebugger_);
+                ImGui::Separator();
+                if (ImGui::MenuItem("Reset Layout"))
+                {
+                    dockLayoutBuilt_ = false; // Rebuild on next frame
+                    // Re-enable all panels
+                    showDashboard_      = true;
+                    showStockCharts_    = true;
+                    showStrategyWizard_ = true;
+                    showStrategies_     = true;
+                    showPortfolio_      = true;
+                    showRecommendations_ = true;
+                    showMarketWarnings_ = true;
+                    showAIOperations_   = true;
+                }
                 ImGui::EndMenu();
             }
 
@@ -454,11 +607,11 @@ namespace stnks
     void UI::ShowStrategies()
     {
         // If a gizmo was clicked, focus this window
-        if (focusStrategiesTab_)
-        {
-            ImGui::SetNextWindowFocus();
-            focusStrategiesTab_ = false;
-        }
+        // if (focusStrategiesTab_)
+        // {
+        //     ImGui::SetNextWindowFocus();
+        //     focusStrategiesTab_ = false;
+        // }
 
         ImGui::Begin("Strategies", &showStrategies_);
 
@@ -487,7 +640,10 @@ namespace stnks
 
                     if (active)
                     {
-                        service_->CancelStrategy(id);
+                        float exitPrice = 0.f;
+                        for (auto& s : cachedStrategies_)
+                            if (s.id == id) { exitPrice = GetCurrentPrice(s.symbol); break; }
+                        service_->CancelStrategy(id, exitPrice);
                         spdlog::info("[Strategy] Cancelled #{}", id);
                     }
                     else
@@ -521,13 +677,13 @@ namespace stnks
         ImGui::Separator();
 
         // When a strategy is selected from chart, force the Active tab
-        bool forceActiveTab = (selectedStrategyId_ > 0);
+        // bool forceActiveTab = (selectedStrategyId_ > 0);
 
         if (ImGui::BeginTabBar("##StratTabs"))
         {
-            ImGuiTabItemFlags activeFlags = forceActiveTab
-                ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
-
+            // ImGuiTabItemFlags activeFlags = forceActiveTab
+            //     ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+            ImGuiTabItemFlags activeFlags =  ImGuiTabItemFlags_None;
             if (ImGui::BeginTabItem("Active", nullptr, activeFlags))
             {
                 DrawStrategyTable([](const Strategy& s) { return s.IsActive(); });
@@ -536,6 +692,11 @@ namespace stnks
             if (ImGui::BeginTabItem("Positions"))
             {
                 DrawStrategyTable([](const Strategy& s) { return s.IsPosition() && s.IsActive(); });
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("AI"))
+            {
+                DrawStrategyTable([](const Strategy& s) { return s.IsAI() && s.IsActive(); });
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Triggered"))
@@ -552,6 +713,207 @@ namespace stnks
             }
             ImGui::EndTabBar();
         }
+
+        ImGui::End();
+    }
+
+    // ── Portfolio ───────────────────────────────────────────────────────────────
+
+    void UI::ShowPortfolio()
+    {
+        ImGui::Begin("Portfolio", &showPortfolio_);
+
+        // Aggregate holdings by symbol from active positions/strategies
+        struct Holding
+        {
+            std::string symbol;
+            float       totalQty      = 0.f;
+            float       avgEntry      = 0.f;
+            float       currentPrice  = 0.f;
+            float       totalCost     = 0.f;
+            float       marketValue   = 0.f;
+            float       pnl           = 0.f;
+            float       pnlPct        = 0.f;
+            int         activeStrats  = 0;
+            int         aiStrats      = 0;
+        };
+
+        std::vector<Holding> holdings;
+        std::unordered_map<std::string, size_t> symbolIdx;
+
+        for (auto& s : cachedStrategies_)
+        {
+            if (!s.IsActive()) continue;
+            if (s.quantity <= 0.f && !s.IsAI()) continue;
+
+            auto it = symbolIdx.find(s.symbol);
+            Holding* h;
+            if (it == symbolIdx.end())
+            {
+                symbolIdx[s.symbol] = holdings.size();
+                holdings.push_back({});
+                h = &holdings.back();
+                h->symbol = s.symbol;
+            }
+            else
+            {
+                h = &holdings[it->second];
+            }
+
+            h->totalCost += s.entryPrice * s.quantity;
+            h->totalQty  += s.quantity;
+            h->activeStrats++;
+            if (s.IsAI()) h->aiStrats++;
+        }
+
+        // Compute current values using per-strategy P/L (respects direction)
+        for (auto& h : holdings)
+        {
+            if (h.totalQty > 0.f)
+                h.avgEntry = h.totalCost / h.totalQty;
+
+            h.currentPrice = GetCurrentPrice(h.symbol);
+            if (h.currentPrice > 0.f)
+            {
+                // Sum P/L per strategy to respect Long/Short direction
+                h.pnl = 0.f;
+                for (auto& s : cachedStrategies_)
+                {
+                    if (!s.IsActive() || s.symbol != h.symbol || s.quantity <= 0.f) continue;
+                    h.pnl += s.UnrealizedPnL(h.currentPrice);
+                }
+                h.marketValue = h.totalCost + h.pnl;
+                h.pnlPct = (h.totalCost > 0.f) ? (h.pnl / h.totalCost) * 100.f : 0.f;
+            }
+        }
+
+        // Total portfolio value
+        float totalValue = 0.f, totalCost = 0.f, totalPnl = 0.f;
+        for (auto& h : holdings)
+        {
+            totalValue += h.marketValue;
+            totalCost  += h.totalCost;
+            totalPnl   += h.pnl;
+        }
+        float totalPnlPct = (totalCost > 0.f) ? (totalPnl / totalCost) * 100.f : 0.f;
+
+        // Header
+        ImVec4 totalCol = totalPnl >= 0.f
+            ? ImVec4(0.2f, 0.85f, 0.4f, 1.f)
+            : ImVec4(0.9f, 0.25f, 0.25f, 1.f);
+
+        ImGui::Text("GBM Portfolio");
+        ImGui::SameLine();
+        ImGui::TextColored(totalCol, "$%.2f", totalValue);
+        ImGui::SameLine();
+        ImGui::TextColored(totalCol, "(%+.2f%%)", totalPnlPct);
+        ImGui::Separator();
+
+        if (holdings.empty())
+        {
+            ImGui::TextDisabled("No active positions with quantity.");
+            ImGui::TextDisabled("Create Position or AI strategies with quantity > 0.");
+            ImGui::End();
+            return;
+        }
+
+        // Table
+        ImGui::PushStyleColor(ImGuiCol_TableRowBg,    ImVec4(0.09f, 0.09f, 0.12f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt, ImVec4(0.11f, 0.11f, 0.14f, 1.f));
+
+        if (ImGui::BeginTable("##Portfolio", 8,
+            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable |
+            ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_HighlightHoveredColumn))
+        {
+            ImGui::TableSetupColumn("Symbol",   ImGuiTableColumnFlags_WidthFixed, 90.f);
+            ImGui::TableSetupColumn("Qty",      ImGuiTableColumnFlags_WidthFixed, 60.f);
+            ImGui::TableSetupColumn("Avg Entry",ImGuiTableColumnFlags_WidthFixed, 80.f);
+            ImGui::TableSetupColumn("Price",    ImGuiTableColumnFlags_WidthFixed, 80.f);
+            ImGui::TableSetupColumn("Value",    ImGuiTableColumnFlags_WidthFixed, 90.f);
+            ImGui::TableSetupColumn("P/L",      ImGuiTableColumnFlags_WidthFixed, 90.f);
+            ImGui::TableSetupColumn("P/L%",     ImGuiTableColumnFlags_WidthFixed, 65.f);
+            ImGui::TableSetupColumn("Strategies",ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableHeadersRow();
+
+            for (int ri = 0; ri < (int)holdings.size(); ++ri)
+            {
+                auto& h = holdings[ri];
+                ImGui::TableNextRow();
+                ImGui::PushID(ri);
+
+                bool positive = h.pnl >= 0.f;
+                ImVec4 pnlCol = positive
+                    ? ImVec4(0.2f, 0.85f, 0.4f, 1.f)
+                    : ImVec4(0.9f, 0.25f, 0.25f, 1.f);
+
+                // Row hover via selectable
+                ImGui::TableNextColumn();
+                ImGui::Selectable("##prow", false,
+                    ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
+                    ImVec2(0, ImGui::GetTextLineHeightWithSpacing()));
+                bool rowHovered = ImGui::IsItemHovered();
+                if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && ImGui::GetIO().MouseClickedCount[0] == 2)
+                    FetchSymbol(h.symbol.c_str());
+                ImGui::SameLine(0.f, 0.f);
+
+                // Symbol color by market type
+                auto mkt = MarketHours::ClassifySymbol(h.symbol);
+                ImVec4 symCol;
+                switch (mkt)
+                {
+                case MarketType::US:      symCol = ImVec4(0.90f, 0.92f, 0.96f, 1.f); break;
+                case MarketType::Mexico:  symCol = ImVec4(0.95f, 0.75f, 0.25f, 1.f); break;
+                case MarketType::Crypto:  symCol = ImVec4(0.30f, 0.85f, 0.90f, 1.f); break;
+                default:                  symCol = ImVec4(0.70f, 0.70f, 0.70f, 1.f); break;
+                }
+                ImGui::TextColored(symCol, "%s", h.symbol.c_str());
+
+                // Qty
+                ImGui::TableNextColumn();
+                ImGui::Text("%.1f", h.totalQty);
+
+                // Avg Entry
+                ImGui::TableNextColumn();
+                ImGui::Text("$%.2f", h.avgEntry);
+
+                // Current Price
+                ImGui::TableNextColumn();
+                if (h.currentPrice > 0.f)
+                    ImGui::TextColored(pnlCol, "$%.2f", h.currentPrice);
+                else
+                    ImGui::TextDisabled("--");
+
+                // Market Value
+                ImGui::TableNextColumn();
+                ImGui::Text("$%.2f", h.marketValue);
+
+                // P/L
+                ImGui::TableNextColumn();
+                ImGui::TextColored(pnlCol, "%+.2f", h.pnl);
+
+                // P/L%
+                ImGui::TableNextColumn();
+                ImGui::TextColored(pnlCol, "%+.2f%%", h.pnlPct);
+
+                // Strategies info
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("%d active", h.activeStrats);
+                if (h.aiStrats > 0)
+                {
+                    ImGui::SameLine();
+                    ImGui::TextColored(ImVec4(0.9f, 0.5f, 1.f, 1.f), "(%d AI)", h.aiStrats);
+                }
+
+                if (rowHovered)
+                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1,
+                        IM_COL32(30, 40, 60, 160));
+
+                ImGui::PopID();
+            }
+
+            ImGui::EndTable();
+        }
+        ImGui::PopStyleColor(2);
 
         ImGui::End();
     }
@@ -575,11 +937,22 @@ namespace stnks
             case SortColumn::Qty:    result = (a->quantity < b->quantity) ? -1 : (a->quantity > b->quantity) ? 1 : 0; break;
             case SortColumn::RR:     result = (a->RiskReward() < b->RiskReward()) ? -1 : (a->RiskReward() > b->RiskReward()) ? 1 : 0; break;
             case SortColumn::PnL:   {
-                float pa = GetCurrentPrice(a->symbol), pb = GetCurrentPrice(b->symbol);
-                float pnlA = pa > 0 ? a->UnrealizedPnLPercent(pa) : 0.f;
-                float pnlB = pb > 0 ? b->UnrealizedPnLPercent(pb) : 0.f;
+                auto getPnl = [this](const Strategy* s) -> float {
+                    if (s->IsActive())
+                    {
+                        float p = GetCurrentPrice(s->symbol);
+                        return (p > 0.f && s->entryPrice > 0.f) ? s->UnrealizedPnLPercent(p) : 0.f;
+                    }
+                    if (s->closedPnlPct != 0.f) return s->closedPnlPct;
+                    if (s->exitPrice > 0.f && s->entryPrice > 0.f)
+                        return s->UnrealizedPnLPercent(s->exitPrice);
+                    return 0.f;
+                };
+                float pnlA = getPnl(a), pnlB = getPnl(b);
                 result = (pnlA < pnlB) ? -1 : (pnlA > pnlB) ? 1 : 0;
             } break;
+            case SortColumn::Exit:
+                result = (a->exitPrice < b->exitPrice) ? -1 : (a->exitPrice > b->exitPrice) ? 1 : 0; break;
             case SortColumn::Status: result = (int)a->status - (int)b->status; break;
             case SortColumn::Notes:  result = a->notes.compare(b->notes); break;
             default: break;
@@ -605,7 +978,7 @@ namespace stnks
         case 4:  cellEditFloat_ = s.takeProfit; break;
         case 5:  cellEditFloat_ = s.stopLoss; break;
         case 6:  cellEditFloat_ = s.quantity; break;
-        case 10: snprintf(cellEditBuf_, sizeof(cellEditBuf_), "%s", s.notes.c_str()); break;
+        case 11: snprintf(cellEditBuf_, sizeof(cellEditBuf_), "%s", s.notes.c_str()); break;
         }
     }
 
@@ -620,7 +993,7 @@ namespace stnks
         case 4:  s.takeProfit = cellEditFloat_; break;
         case 5:  s.stopLoss   = cellEditFloat_; break;
         case 6:  s.quantity   = cellEditFloat_; break;
-        case 10: s.notes = cellEditBuf_; break;
+        case 11: s.notes = cellEditBuf_; break;
         }
 
         service_->UpdateStrategy(s);
@@ -632,6 +1005,15 @@ namespace stnks
 
     float UI::GetCurrentPrice(const std::string& symbol) const
     {
+        // In remote mode, prefer live ENet price from server
+        auto* remote = dynamic_cast<RemoteStrategyService*>(service_.get());
+        if (remote)
+        {
+            float livePrice = remote->GetLivePrice(symbol);
+            if (livePrice > 0.f) return livePrice;
+        }
+
+        // Fallback to local chart data
         for (auto& panel : charts_)
         {
             if (panel.symbol == symbol && !panel.quote.candles.empty())
@@ -657,47 +1039,149 @@ namespace stnks
 
         SortStrategies(filtered);
 
+        // ── Toolbar ────────────────────────────────────────────────────────
+        {
+            int selCount = (int)tableSelection_.size();
+            if (selCount > 0)
+                ImGui::Text("%d selected", selCount);
+            else
+                ImGui::TextDisabled("Select rows with checkboxes");
+
+            ImGui::SameLine(200.f);
+
+            bool hasSel = selCount > 0;
+            if (!hasSel) ImGui::BeginDisabled();
+
+            if (ImGui::SmallButton("Enable"))
+            {
+                for (auto& s : cachedStrategies_)
+                    if (tableSelection_.count(s.id)) { s.enabled = true; service_->UpdateStrategy(s); }
+                strategiesDirty_ = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Disable"))
+            {
+                for (auto& s : cachedStrategies_)
+                    if (tableSelection_.count(s.id)) { s.enabled = false; service_->UpdateStrategy(s); }
+                strategiesDirty_ = true;
+            }
+            ImGui::SameLine();
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.3f, 0.3f, 1.f));
+            if (ImGui::SmallButton("Delete Selected"))
+            {
+                for (int64_t id : tableSelection_)
+                {
+                    bool active = false;
+                    for (auto& s : cachedStrategies_)
+                        if (s.id == id && s.IsActive()) { active = true; break; }
+                    if (active)
+                    {
+                        float ep = 0.f;
+                        for (auto& s : cachedStrategies_)
+                            if (s.id == id) { ep = GetCurrentPrice(s.symbol); break; }
+                        service_->CancelStrategy(id, ep);
+                    }
+                    else
+                        service_->DeleteStrategy(id);
+                }
+                tableSelection_.clear();
+                strategiesDirty_ = true;
+            }
+            ImGui::PopStyleColor();
+
+            if (!hasSel) ImGui::EndDisabled();
+
+            ImGui::SameLine(ImGui::GetContentRegionAvail().x - 60.f);
+            if (ImGui::SmallButton("Clear"))
+                tableSelection_.clear();
+        }
+
+        ImGui::Spacing();
+
+        // ── Table ──────────────────────────────────────────────────────────
         ImGuiTableFlags tableFlags =
             ImGuiTableFlags_Borders |
             ImGuiTableFlags_RowBg |
             ImGuiTableFlags_Resizable |
             ImGuiTableFlags_Reorderable |
             ImGuiTableFlags_Sortable |
-            ImGuiTableFlags_ScrollY;
+            ImGuiTableFlags_ScrollY |
+            ImGuiTableFlags_Hideable |
+            ImGuiTableFlags_HighlightHoveredColumn;
 
-        constexpr int kColCount = 12;
+        // Push table row colors for better hover/selection UX
+        ImGui::PushStyleColor(ImGuiCol_TableRowBg,        ImVec4(0.09f, 0.09f, 0.12f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt,     ImVec4(0.11f, 0.11f, 0.14f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered,     ImVec4(0.22f, 0.28f, 0.42f, 0.8f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive,      ImVec4(0.26f, 0.34f, 0.52f, 0.9f));
+
+        constexpr int kColCount = 15;
         if (!ImGui::BeginTable("##StratTable", kColCount, tableFlags, ImVec2(0.f, 0.f)))
+        {
+            ImGui::PopStyleColor(4);
             return;
+        }
 
         constexpr auto F = ImGuiTableColumnFlags_WidthFixed;
         ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("##chk",   F | ImGuiTableColumnFlags_NoSort | ImGuiTableColumnFlags_NoResize, 18.f);
         ImGui::TableSetupColumn("Symbol",  F | ImGuiTableColumnFlags_DefaultSort, 90.f);
         ImGui::TableSetupColumn("Type",    F, 55.f);
         ImGui::TableSetupColumn("Dir",     F, 50.f);
         ImGui::TableSetupColumn("Entry",   F, 75.f);
+        ImGui::TableSetupColumn("Price",   F | ImGuiTableColumnFlags_NoSort, 75.f);  // Current price
         ImGui::TableSetupColumn("TP",      F, 75.f);
         ImGui::TableSetupColumn("SL",      F, 75.f);
-        ImGui::TableSetupColumn("Qty",     F, 60.f);
-        ImGui::TableSetupColumn("R:R",     F | ImGuiTableColumnFlags_NoSort, 50.f);
-        ImGui::TableSetupColumn("P/L%",    F, 65.f);
+        ImGui::TableSetupColumn("Qty",     F, 50.f);
+        ImGui::TableSetupColumn("R:R",     F | ImGuiTableColumnFlags_NoSort, 45.f);
+        ImGui::TableSetupColumn("P/L%",    F, 60.f);
+        ImGui::TableSetupColumn("Exit",    F, 70.f);
         ImGui::TableSetupColumn("Status",  F, 70.f);
         ImGui::TableSetupColumn("Notes",   ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Actions", F | ImGuiTableColumnFlags_NoSort, 120.f);
-        ImGui::TableHeadersRow();
+        ImGui::TableSetupColumn("",        F | ImGuiTableColumnFlags_NoSort, 80.f);  // Actions
 
-        // Handle ImGui sort specs
+        // Custom header row with select-all checkbox
+        ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+        for (int col = 0; col < kColCount; ++col)
+        {
+            ImGui::TableSetColumnIndex(col);
+            if (col == 0)
+            {
+                // Select-all checkbox
+                bool allSelected = !filtered.empty() && tableSelection_.size() == filtered.size();
+                bool someSelected = !tableSelection_.empty() && !allSelected;
+                if (someSelected)
+                    ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, true);
+                if (ImGui::Checkbox("##all", &allSelected))
+                {
+                    if (allSelected)
+                        for (auto* p : filtered) tableSelection_.insert(p->id);
+                    else
+                        tableSelection_.clear();
+                }
+                if (someSelected)
+                    ImGui::PopItemFlag();
+            }
+            else
+            {
+                ImGui::TableHeader(ImGui::TableGetColumnName(col));
+            }
+        }
+
+        // Handle ImGui sort specs (offset by 1 for checkbox column)
         if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs())
         {
             if (specs->SpecsDirty && specs->SpecsCount > 0)
             {
                 auto& spec = specs->Specs[0];
+                // Column indices: 0=check, 1=sym, 2=type, 3=dir, 4=entry, 5=price, 6=tp, 7=sl, 8=qty, 9=rr, 10=pnl, 11=exit, 12=status, 13=notes, 14=actions
                 static const SortColumn colMap[] = {
-                    SortColumn::Symbol, SortColumn::Type, SortColumn::Dir,
-                    SortColumn::Entry, SortColumn::TP, SortColumn::SL,
+                    SortColumn::None, SortColumn::Symbol, SortColumn::Type, SortColumn::Dir,
+                    SortColumn::Entry, SortColumn::None, SortColumn::TP, SortColumn::SL,
                     SortColumn::Qty, SortColumn::RR, SortColumn::PnL,
-                    SortColumn::Status, SortColumn::Notes, SortColumn::None
+                    SortColumn::Exit, SortColumn::Status, SortColumn::Notes, SortColumn::None
                 };
-                if (spec.ColumnIndex >= 0 && spec.ColumnIndex < 11)
+                if (spec.ColumnIndex >= 0 && spec.ColumnIndex < 15)
                     tableSortCol_ = colMap[spec.ColumnIndex];
                 else
                     tableSortCol_ = SortColumn::None;
@@ -717,14 +1201,28 @@ namespace stnks
             Strategy& s = *filtered[rowIdx];
             bool isInSelection = tableSelection_.count(s.id) > 0;
             bool isCellEditing = (editCellRowId_ == s.id);
+            bool isActiveEdit  = (s.id == selectedStrategyId_);
 
             ImGui::TableNextRow();
             ImGui::PushID(static_cast<int>(s.id));
 
-            // Row selection highlight
-            if (isInSelection)
+            // Dim disabled strategies
+            if (!s.enabled)
+                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.5f);
+
+            // Row background colors based on state
+            if (isActiveEdit)
+            {
+                // Currently being edited (from chart) — distinct gold highlight
                 ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1,
-                    IM_COL32(40, 55, 90, 180));
+                    IM_COL32(60, 55, 20, 200));
+            }
+            else if (isInSelection)
+            {
+                // Multi-selected — blue tint
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1,
+                    IM_COL32(35, 55, 100, 180));
+            }
 
             // Scroll to selected row (one-shot from chart gizmo)
             if (s.id == selectedStrategyId_ && scrollToStrategy_)
@@ -739,15 +1237,11 @@ namespace stnks
                 {
                     if (io.KeyCtrl)
                     {
-                        // Ctrl+click: toggle this row in selection
-                        if (isInSelection)
-                            tableSelection_.erase(s.id);
-                        else
-                            tableSelection_.insert(s.id);
+                        if (isInSelection) tableSelection_.erase(s.id);
+                        else tableSelection_.insert(s.id);
                     }
                     else if (io.KeyShift && lastClickedId_ > 0)
                     {
-                        // Shift+click: range select from lastClickedId_ to this row
                         bool inRange = false;
                         for (auto* p : filtered)
                         {
@@ -755,17 +1249,14 @@ namespace stnks
                             {
                                 inRange = !inRange;
                                 tableSelection_.insert(p->id);
-                                if (!inRange) break; // We toggled twice = end of range
+                                if (!inRange) break;
                             }
                             else if (inRange)
-                            {
                                 tableSelection_.insert(p->id);
-                            }
                         }
                     }
                     else
                     {
-                        // Plain click: select only this row
                         tableSelection_.clear();
                         tableSelection_.insert(s.id);
                         selectedStrategyId_ = s.id;
@@ -774,15 +1265,36 @@ namespace stnks
                 }
             };
 
-            // Helper: check for double-click to start editing a cell
             auto HandleCellDblClick = [&](int colIdx) {
                 if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-                {
                     StartCellEdit(s, colIdx);
-                }
             };
 
-            // ── Col 0: Symbol ──
+            // ── Col 0: Checkbox (with row-span selectable for hover) ──
+            ImGui::TableNextColumn();
+            {
+                // Invisible selectable for row hover highlight
+                ImGui::Selectable("##rowsel", isInSelection,
+                    ImGuiSelectableFlags_SpanAllColumns |
+                    ImGuiSelectableFlags_AllowOverlap,
+                    ImVec2(0, ImGui::GetTextLineHeightWithSpacing()));
+                bool rowHovered = ImGui::IsItemHovered();
+                if (rowHovered && !isInSelection && !isActiveEdit)
+                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1,
+                        IM_COL32(28, 38, 58, 140));
+                ImGui::SameLine(0.f, 0.f);
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX());
+
+                bool checked = isInSelection;
+                if (ImGui::Checkbox("##chk", &checked))
+                {
+                    if (checked) tableSelection_.insert(s.id);
+                    else tableSelection_.erase(s.id);
+                    lastClickedId_ = s.id;
+                }
+            }
+
+            // ── Col 1: Symbol (color-coded by market) ──
             ImGui::TableNextColumn();
             if (isCellEditing && editCellCol_ == 0)
             {
@@ -796,29 +1308,40 @@ namespace stnks
             }
             else
             {
-                ImGui::Text("%s", s.symbol.c_str());
+                // Color by market type: US=white, MX=amber, Crypto=cyan
+                auto mkt = MarketHours::ClassifySymbol(s.symbol);
+                ImVec4 symCol;
+                switch (mkt)
+                {
+                case MarketType::US:      symCol = ImVec4(0.90f, 0.92f, 0.96f, 1.f); break;
+                case MarketType::Mexico:  symCol = ImVec4(0.95f, 0.75f, 0.25f, 1.f); break;
+                case MarketType::Crypto:  symCol = ImVec4(0.30f, 0.85f, 0.90f, 1.f); break;
+                default:                  symCol = ImVec4(0.70f, 0.70f, 0.70f, 1.f); break;
+                }
+                ImGui::TextColored(symCol, "%s", s.symbol.c_str());
                 HandleRowClick();
                 HandleCellDblClick(0);
             }
 
-            // ── Col 1: Type ──
+            // ── Col 2: Type ──
             ImGui::TableNextColumn();
             if (isCellEditing && editCellCol_ == 1)
             {
                 int typeVal = static_cast<int>(s.type);
                 ImGui::SetNextItemWidth(-1);
-                if (ImGui::Combo("##type", &typeVal, "TP/SL\0Position\0"))
+                if (ImGui::Combo("##type", &typeVal, "TP/SL\0Position\0AI\0"))
                 {
                     s.type = static_cast<StrategyType>(typeVal);
                     service_->UpdateStrategy(s);
                     strategiesDirty_ = true;
-                    editCellRowId_ = -1;
-                    editCellCol_ = -1;
+                    editCellRowId_ = -1; editCellCol_ = -1;
                 }
             }
             else
             {
-                if (s.IsPosition())
+                if (s.IsAI())
+                    ImGui::TextColored(ImVec4(0.9f, 0.5f, 1.f, 1.f), "AI");
+                else if (s.IsPosition())
                     ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.f, 1.f), "POS");
                 else
                     ImGui::TextDisabled("TP/SL");
@@ -826,7 +1349,7 @@ namespace stnks
                 HandleCellDblClick(1);
             }
 
-            // ── Col 2: Direction ──
+            // ── Col 3: Direction ──
             ImGui::TableNextColumn();
             if (isCellEditing && editCellCol_ == 2)
             {
@@ -837,8 +1360,7 @@ namespace stnks
                     s.direction = static_cast<StrategyDirection>(dir);
                     service_->UpdateStrategy(s);
                     strategiesDirty_ = true;
-                    editCellRowId_ = -1;
-                    editCellCol_ = -1;
+                    editCellRowId_ = -1; editCellCol_ = -1;
                 }
             }
             else
@@ -851,7 +1373,7 @@ namespace stnks
                 HandleCellDblClick(2);
             }
 
-            // ── Col 3: Entry ──
+            // ── Col 4: Entry ──
             ImGui::TableNextColumn();
             if (isCellEditing && editCellCol_ == 3)
             {
@@ -870,7 +1392,23 @@ namespace stnks
                 HandleCellDblClick(3);
             }
 
-            // ── Col 4: TP ──
+            // ── Col 5: Current Price (virtual, read-only) ──
+            ImGui::TableNextColumn();
+            {
+                float curPrice = GetCurrentPrice(s.symbol);
+                if (curPrice > 0.f)
+                {
+                    bool up = curPrice >= s.entryPrice;
+                    ImVec4 col = up ? ImVec4(0.15f, 0.65f, 0.36f, 1.f)
+                                    : ImVec4(0.84f, 0.19f, 0.19f, 1.f);
+                    ImGui::TextColored(col, "%.2f", curPrice);
+                }
+                else
+                    ImGui::TextDisabled("-");
+            }
+            HandleRowClick();
+
+            // ── Col 6: TP ──
             ImGui::TableNextColumn();
             if (isCellEditing && editCellCol_ == 4)
             {
@@ -892,7 +1430,7 @@ namespace stnks
                 HandleCellDblClick(4);
             }
 
-            // ── Col 5: SL ──
+            // ── Col 7: SL ──
             ImGui::TableNextColumn();
             if (isCellEditing && editCellCol_ == 5)
             {
@@ -914,7 +1452,7 @@ namespace stnks
                 HandleCellDblClick(5);
             }
 
-            // ── Col 6: Qty ──
+            // ── Col 8: Qty ──
             ImGui::TableNextColumn();
             if (isCellEditing && editCellCol_ == 6)
             {
@@ -929,16 +1467,16 @@ namespace stnks
             else
             {
                 if (s.quantity > 0.f)
-                    ImGui::Text("%.2f", s.quantity);
+                    ImGui::Text("%.0f", s.quantity);
                 else
                     ImGui::TextDisabled("-");
                 HandleRowClick();
                 HandleCellDblClick(6);
             }
 
-            // ── Col 7: R:R (computed, read-only) ──
+            // ── Col 9: R:R ──
             ImGui::TableNextColumn();
-            if (s.IsTPSL())
+            if (s.IsTPSL() && s.stopLoss > 0.f && s.takeProfit > 0.f)
             {
                 float rr = s.RiskReward();
                 ImVec4 rrCol = rr >= 2.f ? ImVec4(0.15f, 0.65f, 0.36f, 1.f)
@@ -950,24 +1488,59 @@ namespace stnks
                 ImGui::TextDisabled("-");
             HandleRowClick();
 
-            // ── Col 8: P/L% (computed from current price) ──
+            // ── Col 10: P/L% ──
             ImGui::TableNextColumn();
             {
-                float curPrice = GetCurrentPrice(s.symbol);
-                if (curPrice > 0.f && s.entryPrice > 0.f)
+                float pnlPct = 0.f;
+                bool hasPnl = false;
+
+                if (!s.IsActive())
                 {
-                    float pnlPct = s.UnrealizedPnLPercent(curPrice);
+                    // Closed: use frozen P/L, or recompute from exitPrice if missing
+                    if (s.closedPnlPct != 0.f)
+                    {
+                        pnlPct = s.closedPnlPct;
+                        hasPnl = true;
+                    }
+                    else if (s.exitPrice > 0.f && s.entryPrice > 0.f)
+                    {
+                        // Fallback: compute from exit price (for legacy data)
+                        pnlPct = s.UnrealizedPnLPercent(s.exitPrice);
+                        hasPnl = true;
+                    }
+                }
+                else
+                {
+                    // Active: compute live P/L from current market price
+                    float curPrice = GetCurrentPrice(s.symbol);
+                    if (curPrice > 0.f && s.entryPrice > 0.f)
+                    {
+                        pnlPct = s.UnrealizedPnLPercent(curPrice);
+                        hasPnl = true;
+                    }
+                }
+
+                if (hasPnl)
+                {
                     ImVec4 pnlCol = pnlPct >= 0.f
                         ? ImVec4(0.15f, 0.65f, 0.36f, 1.f)
                         : ImVec4(0.84f, 0.19f, 0.19f, 1.f);
-                    ImGui::TextColored(pnlCol, "%+.2f%%", pnlPct);
+                    ImGui::TextColored(pnlCol, "%+.1f%%", pnlPct);
 
                     if (ImGui::IsItemHovered())
                     {
-                        float pnlAbs = s.UnrealizedPnL(curPrice);
-                        ImGui::SetTooltip("P/L: %+.2f %s\nCurrent: %.2f\nEntry: %.2f",
-                            pnlAbs, s.quantity > 0.f ? "(qty-weighted)" : "(per unit)",
-                            curPrice, s.entryPrice);
+                        if (s.IsActive())
+                        {
+                            float curPrice = GetCurrentPrice(s.symbol);
+                            float pnlAbs = s.UnrealizedPnL(curPrice);
+                            ImGui::SetTooltip("P/L: %+.2f\nCurrent: %.2f\nEntry: %.2f",
+                                pnlAbs, curPrice, s.entryPrice);
+                        }
+                        else
+                        {
+                            ImGui::SetTooltip("Closed P/L (frozen)\nExit: %.2f\nEntry: %.2f",
+                                s.exitPrice, s.entryPrice);
+                        }
                     }
                 }
                 else
@@ -975,9 +1548,17 @@ namespace stnks
             }
             HandleRowClick();
 
-            // ── Col 9: Status ──
+            // ── Col 11: Exit Price ──
             ImGui::TableNextColumn();
-            if (isCellEditing && editCellCol_ == 9)
+            if (s.exitPrice > 0.f)
+                ImGui::Text("%.2f", s.exitPrice);
+            else
+                ImGui::TextDisabled("-");
+            HandleRowClick();
+
+            // ── Col 12: Status ──
+            ImGui::TableNextColumn();
+            if (isCellEditing && editCellCol_ == 10)
             {
                 int st = static_cast<int>(s.status);
                 ImGui::SetNextItemWidth(-1);
@@ -988,13 +1569,14 @@ namespace stnks
                         s.triggeredAt = std::time(nullptr);
                     service_->UpdateStrategy(s);
                     strategiesDirty_ = true;
-                    editCellRowId_ = -1;
-                    editCellCol_ = -1;
+                    editCellRowId_ = -1; editCellCol_ = -1;
                 }
             }
             else
             {
-                switch (s.status)
+                if (!s.enabled)
+                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.f), "Disabled");
+                else switch (s.status)
                 {
                 case StrategyStatus::Active:
                     ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.f, 1.f), "Active");
@@ -1010,18 +1592,18 @@ namespace stnks
                     break;
                 }
                 HandleRowClick();
-                HandleCellDblClick(9);
+                HandleCellDblClick(10);
             }
 
-            // ── Col 10: Notes ──
+            // ── Col 13: Notes ──
             ImGui::TableNextColumn();
-            if (isCellEditing && editCellCol_ == 10)
+            if (isCellEditing && editCellCol_ == 11)
             {
                 ImGui::SetNextItemWidth(-1);
                 ImGui::SetKeyboardFocusHere();
                 if (ImGui::InputText("##notes", cellEditBuf_, sizeof(cellEditBuf_),
                     ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll))
-                    CommitCellEdit(s, 10);
+                    CommitCellEdit(s, 11);
                 if (!ImGui::IsItemActive() && !ImGui::IsItemFocused())
                 { editCellRowId_ = -1; editCellCol_ = -1; }
             }
@@ -1032,67 +1614,52 @@ namespace stnks
                 else
                     ImGui::TextDisabled("-");
                 HandleRowClick();
-                HandleCellDblClick(10);
+                HandleCellDblClick(11);
             }
 
-            // ── Col 11: Actions ──
+            // ── Col 14: Actions ──
             ImGui::TableNextColumn();
             if (ImGui::SmallButton("View"))
                 viewSymbol = s.symbol;
-
             ImGui::SameLine();
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.2f, 0.2f, 1.f));
-            if (ImGui::SmallButton("Del"))
+            if (ImGui::SmallButton("X"))
                 deleteId = s.id;
-            ImGui::PopStyleColor();
+
+            if (!s.enabled) ImGui::PopStyleVar(); // Alpha
 
             ImGui::PopID();
         }
 
         ImGui::EndTable();
+        ImGui::PopStyleColor(4); // table row colors
 
-        // Process deferred delete: cancel if active, hard-delete if already closed
+        // Process deferred delete
         if (deleteId > 0)
         {
             tableSelection_.erase(deleteId);
             if (deleteId == selectedStrategyId_)
-            {
-                isEditingInline_ = false;
-                selectedStrategyId_ = -1;
-            }
+            { isEditingInline_ = false; selectedStrategyId_ = -1; }
             if (deleteId == editCellRowId_)
-            {
-                editCellRowId_ = -1;
-                editCellCol_ = -1;
-            }
+            { editCellRowId_ = -1; editCellCol_ = -1; }
 
-            // Find the strategy to check its status
             bool wasActive = false;
             for (auto& s : cachedStrategies_)
-            {
-                if (s.id == deleteId && s.IsActive())
-                {
-                    wasActive = true;
-                    break;
-                }
-            }
+                if (s.id == deleteId && s.IsActive()) { wasActive = true; break; }
 
             if (wasActive)
             {
-                service_->CancelStrategy(deleteId);
-                spdlog::info("[Strategy] Cancelled #{}", deleteId);
+                float exitPrice = 0.f;
+                for (auto& s : cachedStrategies_)
+                    if (s.id == deleteId) { exitPrice = GetCurrentPrice(s.symbol); break; }
+                service_->CancelStrategy(deleteId, exitPrice);
             }
             else
-            {
                 service_->DeleteStrategy(deleteId);
-                spdlog::info("[Strategy] Deleted #{}", deleteId);
-            }
             strategiesDirty_ = true;
+            telemetry_.strategyDeletes++;
         }
         if (!viewSymbol.empty())
-        {
             FetchSymbol(viewSymbol);
-        }
     }
 
     // ── CSV Export / Import ──────────────────────────────────────────────────────
@@ -1112,8 +1679,8 @@ namespace stnks
             return;
         }
 
-        // Header
-        fprintf(f, "id,symbol,type,direction,entry_price,take_profit,stop_loss,quantity,status,priority,parent_id,notes\n");
+        // Header (LOL FIX THIS AI TRASH XDXD)
+        fprintf(f, "id,symbol,type,direction,entry_price,take_profit,stop_loss,quantity,status,priority,parent_id,exit_price,closed_pnl,notes\n");
 
         // Rows: export selected if any, otherwise all
         auto& source = tableSelection_.empty() ? cachedStrategies_ : cachedStrategies_;
@@ -1131,11 +1698,12 @@ namespace stnks
                 pos += 2;
             }
 
-            fprintf(f, "%lld,%s,%d,%d,%.4f,%.4f,%.4f,%.4f,%d,%d,%lld,\"%s\"\n",
+            fprintf(f, "%lld,%s,%d,%d,%.4f,%.4f,%.4f,%.4f,%d,%d,%lld,%.4f,%.4f,\"%s\"\n",
                 (long long)s.id, s.symbol.c_str(),
                 (int)s.type, (int)s.direction,
                 s.entryPrice, s.takeProfit, s.stopLoss, s.quantity,
                 (int)s.status, s.priority, (long long)s.parentId,
+                s.exitPrice, s.closedPnlPct,
                 escapedNotes.c_str());
         }
 
@@ -1151,6 +1719,7 @@ namespace stnks
         auto paths = src.result();
         if (paths.empty()) return;
 
+        //TODO: TF IS THIS PICE OF SHIT USE IFSTREAM
         FILE* f = fopen(paths[0].c_str(), "r");
         if (!f)
         {
@@ -1346,6 +1915,232 @@ namespace stnks
         ImGui::End();
     }
 
+    // ── AI Operations ────────────────────────────────────────────────────────────
+
+    void UI::ShowAIOperations()
+    {
+        ImGui::Begin("AI Operations", &showAIOperations_);
+
+        // Auto-trade toggle (persisted)
+        if (ImGui::Checkbox("Auto-Trade", &aiAutoTrade_))
+        {
+            if (engine_->globals_)
+                engine_->globals_->Set(gk::prefix::STATE, gk::key::AI_AUTO_TRADE, aiAutoTrade_ ? "1" : "0");
+        }
+        ImGui::SameLine();
+        if (aiAutoTrade_)
+            ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.f), "LIVE - AI will execute trades!");
+        else
+            ImGui::TextDisabled("Disabled - AI suggestions only");
+
+        ImGui::Separator();
+
+        if (cachedOperations_.empty())
+        {
+            ImGui::TextDisabled("No AI operations pending.");
+            ImGui::TextDisabled("Add AI-type strategies and wait for analysis cycle.");
+        }
+        else
+        {
+            // Group by urgency
+            for (int sev = (int)InsightSeverity::Alert; sev >= (int)InsightSeverity::Info; --sev)
+            {
+                auto severity = (InsightSeverity)sev;
+                bool hasAny = false;
+                for (auto& op : cachedOperations_)
+                    if (op.urgency == severity) { hasAny = true; break; }
+                if (!hasAny) continue;
+
+                // Section header with color
+                ImVec4 headerCol;
+                const char* headerLabel;
+                switch (severity)
+                {
+                case InsightSeverity::Alert:
+                    headerCol = ImVec4(0.9f, 0.15f, 0.15f, 1.f);
+                    headerLabel = "EMERGENCY";
+                    break;
+                case InsightSeverity::Warning:
+                    headerCol = ImVec4(0.9f, 0.7f, 0.15f, 1.f);
+                    headerLabel = "SHOULD ACT";
+                    break;
+                default:
+                    headerCol = ImVec4(0.3f, 0.8f, 0.4f, 1.f);
+                    headerLabel = "RECOMMENDATIONS";
+                    break;
+                }
+
+                ImGui::TextColored(headerCol, "--- %s ---", headerLabel);
+                ImGui::Spacing();
+
+                for (auto& op : cachedOperations_)
+                {
+                    if (op.urgency != severity) continue;
+
+                    ImGui::PushID(&op);
+
+                    // Operation type badge
+                    ImVec4 typeCol = (op.type == OperationType::Sell)
+                        ? ImVec4(0.9f, 0.3f, 0.3f, 1.f)
+                        : (op.type == OperationType::Buy)
+                            ? ImVec4(0.3f, 0.8f, 0.4f, 1.f)
+                            : ImVec4(0.7f, 0.7f, 0.8f, 1.f);
+
+                    ImGui::TextColored(typeCol, "[%s]", OperationTypeToString(op.type));
+                    ImGui::SameLine();
+                    ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.f, 1.f), "%s", op.symbol.c_str());
+                    ImGui::SameLine();
+
+                    if (op.suggestedPrice > 0.f)
+                        ImGui::Text("@ %.2f", op.suggestedPrice);
+
+                    if (op.strategyId > 0)
+                    {
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("(#%lld)", (long long)op.strategyId);
+                    }
+
+                    // Confidence bar
+                    if (op.confidence > 0.f)
+                    {
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("%.0f%%", op.confidence * 100.f);
+                    }
+
+                    // Reason
+                    if (!op.reason.empty())
+                    {
+                        ImGui::Indent(20.f);
+                        ImGui::TextWrapped("%s", op.reason.c_str());
+                        ImGui::Unindent(20.f);
+                    }
+
+                    // Status / action button
+                    if (op.executed)
+                    {
+                        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 60.f);
+                        ImGui::TextColored(ImVec4(0.3f, 0.8f, 0.4f, 1.f), "DONE");
+                    }
+                    else if (!aiAutoTrade_)
+                    {
+                        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 80.f);
+                        if (ImGui::SmallButton("Execute"))
+                        {
+                            // Manual execution of single operation
+                            op.executed = true;
+                            // TODO: Wire to broker action
+                        }
+                    }
+
+                    ImGui::Separator();
+                    ImGui::PopID();
+                }
+
+                ImGui::Spacing();
+            }
+        }
+
+        ImGui::End();
+    }
+
+    // ── Strategy Wizard (Dockable) ─────────────────────────────────────────────
+
+    void UI::ShowStrategyWizard()
+    {
+        // Get candle data from the chart matching the wizard's symbol (or first available)
+        const std::vector<Candle>* candles = nullptr;
+        int focusedCandle = -1;
+        int totalCandles = 0;
+
+        const std::string& wizSymbol = wizard_.GetStrategy().symbol;
+        for (auto& panel : charts_)
+        {
+            if (!panel.quote.candles.empty() &&
+                (panel.symbol == wizSymbol || wizSymbol.empty()))
+            {
+                candles = &panel.quote.candles;
+                focusedCandle = panel.chart.GetFocusedCandle();
+                totalCandles = panel.chart.GetCandleCount();
+                break;
+            }
+        }
+        // Fallback to any chart if symbol not found
+        if (!candles)
+        {
+            for (auto& panel : charts_)
+            {
+                if (!panel.quote.candles.empty())
+                {
+                    candles = &panel.quote.candles;
+                    focusedCandle = panel.chart.GetFocusedCandle();
+                    totalCandles = panel.chart.GetCandleCount();
+                    break;
+                }
+            }
+        }
+
+        wizard_.DrawDockable(&showStrategyWizard_, candles, focusedCandle, totalCandles);
+
+        // Handle wizard results at UI level
+        if (wizard_.WasConfirmed())
+        {
+            Strategy result = wizard_.GetStrategy();
+
+            // Find matching StrategyLayer and apply
+            bool handled = false;
+            for (auto& panel : charts_)
+            {
+                auto* sl = panel.chart.GetStrategyLayer();
+                if (!sl) continue;
+
+                if (sl->GetEditingId() > 0 && sl->GetEditingId() == result.id)
+                {
+                    // Edit mode: update existing
+                    if (sl->onStrategyChanged)
+                        sl->onStrategyChanged(result, false);
+                    sl->StopEditing();
+                    handled = true;
+                    break;
+                }
+                else if (result.symbol == panel.symbol && result.id == 0)
+                {
+                    // Create mode: insert new via layer callback
+                    if (sl->onStrategyChanged)
+                        sl->onStrategyChanged(result, true);
+                    handled = true;
+                    break;
+                }
+            }
+
+            // Fallback: save directly if no chart panel matched
+            if (!handled && service_)
+            {
+                if (result.id > 0)
+                    service_->UpdateStrategy(result);
+                else
+                    service_->InsertStrategy(result);
+                strategiesDirty_ = true;
+            }
+
+            wizard_.ConsumeResult();
+        }
+        else if (wizard_.WasCancelled())
+        {
+            // Notify any editing layer
+            for (auto& panel : charts_)
+            {
+                auto* sl = panel.chart.GetStrategyLayer();
+                if (sl && sl->GetEditingId() > 0)
+                {
+                    sl->StopEditing();
+                    if (sl->onEditingDismissed)
+                        sl->onEditingDismissed();
+                }
+            }
+            wizard_.ConsumeResult();
+        }
+    }
+
     // ── Stock Charts ───────────────────────────────────────────────────────────
 
     void UI::ShowStockCharts()
@@ -1356,16 +2151,18 @@ namespace stnks
         ShowSymbolSelector();
         ImGui::SameLine(ImGui::GetContentRegionAvail().x - 220.f);
 
-        ImGui::TextDisabled("Refresh:");
+        ImGui::TextDisabled("Min interval:");
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(70.f);
+        ImGui::SetNextItemWidth(50.f);
         ImGui::InputFloat("##refreshRate", &marketRefreshInterval_, 0.f, 0.f, "%.0fs");
         marketRefreshInterval_ = std::max(1.f, marketRefreshInterval_);
         ImGui::SameLine();
-        ImGui::TextDisabled("(%.0fs)", marketRefreshTimer_);
+        ImGui::TextDisabled("(next: %.0fs)", marketRefreshTimer_);
         ImGui::SameLine();
         if (ImGui::SmallButton("Now"))
-            marketRefreshTimer_ = 0.f;
+        {
+            for (auto& p : charts_) p.refreshTimer = 0.f;
+        }
 
         ImGui::Separator();
 
@@ -1436,6 +2233,22 @@ namespace stnks
                             ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.f),
                                 "(%s ~%dm delay)", source->GetName(), source->GetDelaySeconds() / 60);
                         }
+
+                        // Market state badge
+                        MarketState mktState = MarketHours::GetState(it->symbol);
+                        MarketType mktType = MarketHours::ClassifySymbol(it->symbol);
+                        ImVec4 mktColor;
+                        switch (mktState)
+                        {
+                        case MarketState::Open:       mktColor = ImVec4(0.2f, 0.9f, 0.3f, 1.f); break;
+                        case MarketState::PreMarket:  mktColor = ImVec4(0.9f, 0.8f, 0.2f, 1.f); break;
+                        case MarketState::AfterHours: mktColor = ImVec4(0.8f, 0.6f, 0.2f, 1.f); break;
+                        case MarketState::Closed:     mktColor = ImVec4(0.6f, 0.3f, 0.3f, 1.f); break;
+                        }
+                        ImGui::SameLine();
+                        ImGui::TextColored(mktColor, "[%s %s]",
+                            MarketHours::MarketTypeToString(mktType),
+                            MarketHours::StateToString(mktState));
                     }
                     ImGui::PopID();
 
@@ -1455,6 +2268,63 @@ namespace stnks
                     else
                     {
                         it->chart.Draw(("##chart_" + it->symbol).c_str());
+
+                        // Chart bounds for wizard interaction
+                        ImVec2 chartMin = ImGui::GetItemRectMin();
+                        ImVec2 chartMax = ImGui::GetItemRectMax();
+                        auto* stratLayer = it->chart.GetStrategyLayer();
+                        if (stratLayer)
+                        {
+                            const std::vector<Candle>* candles = it->quote.candles.empty()
+                                ? nullptr : &it->quote.candles;
+
+                            // PreUpdate on the UI-level dockable wizard for historical click detection
+                            wizard_.PreUpdate(chartMin, chartMax,
+                                it->chart.GetFocusedCandle(),
+                                it->chart.GetCandleCount(),
+                                candles);
+
+                            // Also PreUpdate the layer wizard (for overlay mode redundancy)
+                            auto& layerWiz = stratLayer->GetWizard();
+                            layerWiz.PreUpdate(chartMin, chartMax,
+                                it->chart.GetFocusedCandle(),
+                                it->chart.GetCandleCount(),
+                                candles);
+
+                            // "+ Strategy" overlay button on chart (opens dockable wizard)
+                            if (!wizard_.IsOpen() && !layerWiz.IsOpen())
+                            {
+                                ImVec2 btnPos(chartMin.x + 8.f, chartMin.y + 8.f);
+                                ImGui::SetNextWindowPos(btnPos, ImGuiCond_Always);
+                                ImGui::SetNextWindowSize(ImVec2(0, 0));
+                                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
+                                ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.f);
+                                ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.12f, 0.9f));
+
+                                std::string btnWinId = "##StratBtn_" + it->symbol;
+                                ImGui::Begin(btnWinId.c_str(), nullptr,
+                                    ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                    ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                                    ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+                                if (ImGui::SmallButton("+ Strategy"))
+                                {
+                                    float price = it->quote.candles.empty() ? 0.f : it->quote.candles.back().close;
+                                    wizard_.OpenCreate(it->symbol, StrategyType::TPSL, StrategyDirection::Long, price);
+                                    showStrategyWizard_ = true; // Ensure panel is visible
+                                }
+
+                                ImGui::End();
+                                ImGui::PopStyleColor();
+                                ImGui::PopStyleVar(2);
+                            }
+
+                            // Draw layer wizard overlay (redundancy — for right-click context menu created strats)
+                            stratLayer->DrawWizard(chartMin, chartMax,
+                                it->chart.GetFocusedCandle(),
+                                it->chart.GetCandleCount(),
+                                candles);
+                        }
                     }
                     ImGui::EndTabItem();
                 }
@@ -1546,6 +2416,8 @@ namespace stnks
                          const char* interval,
                          const char* range)
     {
+        telemetry_.marketFetches++;
+
         // If chart already exists for this symbol, don't duplicate — just refetch
         for (auto& panel : charts_)
         {
@@ -1575,59 +2447,122 @@ namespace stnks
     {
         ImGui::Begin("Dashboard", &showDashboard_);
 
-        ImGui::Text("STNKS Finance Tool");
-        ImGui::Separator();
+        // Update uptime
+        telemetry_.uptimeSec += ImGui::GetIO().DeltaTime;
+        telemetry_.avgFrameMs = 1000.0f / ImGui::GetIO().Framerate;
 
-        ImGui::Text("Frame: %.3f ms  |  FPS: %.1f",
-                     1000.0f / ImGui::GetIO().Framerate,
-                     ImGui::GetIO().Framerate);
-
-        ImGui::Separator();
-        ImGui::Text("Engine Status");
-
-        auto& dbg = engine_->threadDebugInfo_;
-        ImGui::Text("Update:  %.2f ms", dbg.updatePhaseMs);
-        ImGui::Text("Present: %.2f ms", dbg.presentPhaseMs);
-
-        if (dbg.historyOffset > 0 || dbg.frameHistory[0] > 0.f)
+        // ── Connection Status ──────────────────────────────────────────────
         {
-            ImGui::Separator();
-            ImGui::Text("Frame Time History");
-            ImGui::PlotLines("##frame", dbg.frameHistory.data(),
-                             ThreadDebugInfo::kHistorySize, dbg.historyOffset,
-                             nullptr, 0.f, 33.3f, ImVec2(0, 60));
+            bool connected = service_->IsConnected();
+            ImVec4 statusCol = connected
+                ? ImVec4(0.15f, 0.85f, 0.40f, 1.f)
+                : ImVec4(0.85f, 0.20f, 0.20f, 1.f);
+
+            ImGui::TextColored(statusCol, "%s", connected ? "CONNECTED" : "DISCONNECTED");
+            ImGui::SameLine();
+
+            std::string url = service_->GetServerUrl();
+            if (url == "local://embedded")
+                ImGui::TextDisabled("(monolith)");
+            else
+            {
+                ImGui::TextDisabled("(%s)", url.c_str());
+                auto* remote = dynamic_cast<RemoteStrategyService*>(service_.get());
+                if (remote)
+                {
+                    float latency = remote->GetLatencyMs();
+                    if (latency >= 0.f)
+                    {
+                        ImGui::SameLine();
+                        ImVec4 latCol = latency < 50.f ? ImVec4(0.15f, 0.85f, 0.40f, 1.f)
+                                      : latency < 150.f ? ImVec4(0.9f, 0.8f, 0.2f, 1.f)
+                                      : ImVec4(0.85f, 0.20f, 0.20f, 1.f);
+                        ImGui::TextColored(latCol, "%.0fms", latency);
+                    }
+                }
+            }
+
+            bool monitoring = service_->IsMonitoring();
+            ImGui::SameLine();
+            if (monitoring)
+                ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.f, 1.f), "[Monitoring]");
+            else
+                ImGui::TextDisabled("[Idle]");
         }
 
         ImGui::Separator();
-        ImGui::Text("Thread Pool: %zu threads", engine_->threadRegistry_.GetPoolSize());
 
-        auto status = engine_->threadRegistry_.GetStatus();
-        if (!status.empty())
+        // ── Performance ────────────────────────────────────────────────────
+        if (ImGui::CollapsingHeader("Performance", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            ImGui::Text("Workers:");
-            for (const auto& t : status)
+            ImGui::Text("FPS: %.1f  (%.2f ms/frame)", ImGui::GetIO().Framerate, telemetry_.avgFrameMs);
+
+            auto& dbg = engine_->threadDebugInfo_;
+            if (dbg.historyOffset > 0 || dbg.frameHistory[0] > 0.f)
             {
-                ImGui::BulletText("%s: %s (%.2f ms, %zu iters)",
-                    t.name.c_str(),
-                    t.state == WorkerThread::State::Running ? "Running" :
-                    t.state == WorkerThread::State::Idle    ? "Idle"    : "Stopped",
-                    t.lastDurationMs, t.iterations);
+                ImGui::PlotLines("##frame", dbg.frameHistory.data(),
+                                 ThreadDebugInfo::kHistorySize, dbg.historyOffset,
+                                 nullptr, 0.f, 33.3f, ImVec2(-1, 40));
+            }
+
+            // Uptime
+            int upH = (int)(telemetry_.uptimeSec / 3600.f);
+            int upM = (int)(std::fmod(telemetry_.uptimeSec, 3600.f) / 60.f);
+            int upS = (int)std::fmod(telemetry_.uptimeSec, 60.f);
+            ImGui::Text("Uptime: %02d:%02d:%02d", upH, upM, upS);
+        }
+
+        // ── Telemetry ──────────────────────────────────────────────────────
+        if (ImGui::CollapsingHeader("Telemetry", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            ImGui::TextDisabled("Client");
+            ImGui::Text("Market Fetches:    %lld", (long long)telemetry_.marketFetches);
+            ImGui::Text("Chart Refreshes:   %lld", (long long)telemetry_.chartRefreshes);
+            ImGui::Text("Strategy Saves:    %lld", (long long)telemetry_.strategySaves);
+            ImGui::Text("Strategy Deletes:  %lld", (long long)telemetry_.strategyDeletes);
+            ImGui::Text("Open Charts:       %d", (int)charts_.size());
+
+            // Server telemetry (remote mode only, fetched with status polling)
+            auto* remote = dynamic_cast<RemoteStrategyService*>(service_.get());
+            if (remote && service_->IsConnected())
+            {
+                auto st = remote->GetServerTelemetry();
+                ImGui::Spacing();
+                ImGui::TextDisabled("Server");
+                ImGui::Text("Requests Served:   %lld", (long long)st.requestsServed);
+                ImGui::Text("Ticks Broadcast:   %lld", (long long)st.ticksBroadcast);
+                ImGui::Text("Connected Clients: %d", st.clients);
+
+                if (st.uptimeSec > 0)
+                {
+                    int sH = st.uptimeSec / 3600;
+                    int sM = (st.uptimeSec % 3600) / 60;
+                    int sS = st.uptimeSec % 60;
+                    ImGui::Text("Server Uptime:     %02d:%02d:%02d", sH, sM, sS);
+                }
             }
         }
 
-        ImGui::Separator();
-        ImGui::Text("ECS: %zu entities", engine_->registry_.Entities().size());
+        // ── Strategies Summary ─────────────────────────────────────────────
+        if (ImGui::CollapsingHeader("Strategies", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            int activeCount = (int)std::count_if(
+                cachedStrategies_.begin(), cachedStrategies_.end(),
+                [](const Strategy& s) { return s.IsActive(); });
+            int posCount = (int)std::count_if(
+                cachedStrategies_.begin(), cachedStrategies_.end(),
+                [](const Strategy& s) { return s.IsPosition() && s.IsActive(); });
+            int aiCount = (int)std::count_if(
+                cachedStrategies_.begin(), cachedStrategies_.end(),
+                [](const Strategy& s) { return s.IsAI() && s.IsActive(); });
 
-        int activeCount = (int)std::count_if(
-            cachedStrategies_.begin(), cachedStrategies_.end(),
-            [](const Strategy& s) { return s.IsActive(); });
-        int posCount = (int)std::count_if(
-            cachedStrategies_.begin(), cachedStrategies_.end(),
-            [](const Strategy& s) { return s.IsPosition() && s.IsActive(); });
+            ImGui::Text("Active: %d  |  Positions: %d  |  AI: %d", activeCount, posCount, aiCount);
+            ImGui::Text("Total: %d", (int)cachedStrategies_.size());
 
-        ImGui::Text("Strategies: %d active (%d positions)", activeCount, posCount);
-        ImGui::Text("Insights: %zu recs, %zu warnings",
-                     cachedRecommendations_.size(), cachedWarnings_.size());
+            if (!cachedRecommendations_.empty() || !cachedWarnings_.empty() || !cachedOperations_.empty())
+                ImGui::Text("Insights: %zu recs, %zu warnings, %zu ops",
+                             cachedRecommendations_.size(), cachedWarnings_.size(), cachedOperations_.size());
+        }
 
         ImGui::End();
     }
@@ -1636,35 +2571,171 @@ namespace stnks
     {
         ImGui::Begin("Threads Debugger", &showThreadsDebugger_);
 
-        ImGui::Text("Pool Size: %zu", engine_->threadRegistry_.GetPoolSize());
-        ImGui::Separator();
+        auto& td  = engine_->threadDebugInfo_;
+        int   off = td.historyOffset;
+        const float avail = ImGui::GetContentRegionAvail().x;
 
-        auto status = engine_->threadRegistry_.GetStatus();
-        if (status.empty())
+        // ── Channel Timings table with colored bars ─────────────────────────
+        ImGui::SeparatorText("Channel Timings");
+
+        struct Row { const char* label; float ms; bool async; ImVec4 col; };
+        Row rows[] = {
+            { "MAIN",       td.main.durationMs,       false, {0.30f, 0.65f, 1.00f, 1.f} },
+            { "RENDERING",  td.rendering.durationMs,  false, {1.00f, 0.55f, 0.20f, 1.f} },
+        };
+
+        // Add worker threads dynamically
+        auto workerStatus = engine_->threadRegistry_.GetStatus();
+        std::vector<Row> allRows(std::begin(rows), std::end(rows));
+
+        // Predefined colors for workers
+        ImVec4 workerColors[] = {
+            {0.40f, 0.90f, 0.80f, 1.f},  // cyan
+            {0.55f, 0.85f, 0.40f, 1.f},  // green
+            {0.90f, 0.40f, 0.85f, 1.f},  // purple
+            {0.85f, 0.85f, 0.20f, 1.f},  // yellow
+            {0.90f, 0.55f, 0.55f, 1.f},  // red
+            {0.55f, 0.55f, 0.90f, 1.f},  // blue
+        };
+        int colorIdx = 0;
+        for (auto& w : workerStatus)
         {
-            ImGui::TextDisabled("No active worker threads");
+            ImVec4 col = workerColors[colorIdx % 6];
+            colorIdx++;
+            allRows.push_back({ w.name.c_str(), w.lastDurationMs,
+                                true, col });
+        }
+
+        if (ImGui::BeginTable("##channeltable", 4,
+                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                ImGuiTableFlags_SizingFixedFit))
+        {
+            ImGui::TableSetupColumn("Channel", ImGuiTableColumnFlags_WidthFixed, 120.f);
+            ImGui::TableSetupColumn("ms",      ImGuiTableColumnFlags_WidthFixed,  60.f);
+            ImGui::TableSetupColumn("Thread",  ImGuiTableColumnFlags_WidthFixed,  70.f);
+            ImGui::TableSetupColumn("Bar",     ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableHeadersRow();
+
+            float maxMs = 0.1f;
+            for (auto& r : allRows) maxMs = std::max(maxMs, r.ms);
+
+            for (auto& r : allRows)
+            {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextColored(r.col, "%s", r.label);
+
+                ImGui::TableSetColumnIndex(1);
+                ImGui::Text("%.2f", r.ms);
+
+                ImGui::TableSetColumnIndex(2);
+                ImGui::TextDisabled(r.async ? "worker" : "main");
+
+                ImGui::TableSetColumnIndex(3);
+                float barW = (r.ms / maxMs) * ImGui::GetContentRegionAvail().x;
+                ImVec2 p = ImGui::GetCursorScreenPos();
+                ImGui::GetWindowDrawList()->AddRectFilled(
+                    p, {p.x + barW, p.y + 12.f},
+                    ImGui::ColorConvertFloat4ToU32(r.col), 2.f);
+                ImGui::Dummy({ImGui::GetContentRegionAvail().x, 12.f});
+            }
+            ImGui::EndTable();
+        }
+
+        ImGui::Spacing();
+        ImGui::Text("Update:  %.2f ms  |  Present: %.2f ms  |  Frame: %.2f ms  (%.1f fps)",
+                    td.updatePhaseMs, td.presentPhaseMs,
+                    td.updatePhaseMs + td.presentPhaseMs,
+                    (td.updatePhaseMs + td.presentPhaseMs) > 0.f
+                        ? 1000.f / (td.updatePhaseMs + td.presentPhaseMs) : 0.f);
+
+        // ── Frame Timeline (horizontal stacked bars) ────────────────────────
+        ImGui::SeparatorText("Frame Timeline");
+
+        float total = td.updatePhaseMs + td.presentPhaseMs;
+        if (total > 0.f)
+        {
+            const float tlW  = avail - 8.f;
+            const float rowH = 20.f;
+            const float gap  = 4.f;
+
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            ImVec2 origin  = ImGui::GetCursorScreenPos();
+
+            auto drawSegment = [&](float xStart, float dur, ImVec4 col,
+                                    const char* lbl, float rowY)
+            {
+                float x0 = origin.x + (xStart / total) * tlW;
+                float x1 = origin.x + ((xStart + dur) / total) * tlW;
+                if (x1 <= x0 + 1.f) x1 = x0 + 2.f;
+                ImU32 c = ImGui::ColorConvertFloat4ToU32(col);
+                dl->AddRectFilled({x0, rowY}, {x1, rowY + rowH}, c, 3.f);
+                dl->AddRect({x0, rowY}, {x1, rowY + rowH}, IM_COL32(0,0,0,120), 3.f);
+                ImVec2 tsz = ImGui::CalcTextSize(lbl);
+                if (x1 - x0 > tsz.x + 4.f)
+                    dl->AddText({x0 + (x1 - x0 - tsz.x) * 0.5f,
+                                 rowY + (rowH - tsz.y) * 0.5f},
+                                IM_COL32(255,255,255,230), lbl);
+            };
+
+            float row0 = origin.y;           // Main thread
+            float row1 = row0 + rowH + gap;  // Workers
+
+            // Main thread: MAIN then RENDERING
+            drawSegment(0.f, td.main.durationMs,
+                        {0.30f, 0.65f, 1.00f, 0.9f}, "MAIN", row0);
+            drawSegment(td.updatePhaseMs, td.rendering.durationMs,
+                        {1.00f, 0.55f, 0.20f, 0.9f}, "RENDER", row0);
+
+            // Workers row: show each worker as segment
+            float workerOffset = 0.f;
+            colorIdx = 0;
+            for (auto& w : workerStatus)
+            {
+                ImVec4 col = workerColors[colorIdx % 6];
+                col.w = 0.9f;
+                colorIdx++;
+                // Scale worker time proportionally
+                float dur = std::min(w.lastDurationMs, total);
+                drawSegment(workerOffset, dur, col, w.name.c_str(), row1);
+                workerOffset += dur;
+            }
+
+            // Row labels
+            dl->AddText({origin.x, row0 + rowH + 2.f}, IM_COL32(180,180,180,160), "main");
+            dl->AddText({origin.x, row1 + rowH + 2.f}, IM_COL32(180,180,180,160), "workers");
+
+            ImGui::Dummy({tlW, rowH * 2.f + gap + 16.f});
         }
         else
         {
-            ImGui::Columns(4, "threads");
-            ImGui::Text("Name"); ImGui::NextColumn();
-            ImGui::Text("State"); ImGui::NextColumn();
-            ImGui::Text("Duration"); ImGui::NextColumn();
-            ImGui::Text("Iterations"); ImGui::NextColumn();
-            ImGui::Separator();
+            ImGui::TextDisabled("No frame data yet");
+        }
 
-            for (const auto& t : status)
-            {
-                ImGui::Text("%s", t.name.c_str()); ImGui::NextColumn();
-                const char* stateStr =
-                    t.state == WorkerThread::State::Running  ? "Running" :
-                    t.state == WorkerThread::State::Idle     ? "Idle" :
-                    t.state == WorkerThread::State::Stopping ? "Stopping" : "Stopped";
-                ImGui::Text("%s", stateStr); ImGui::NextColumn();
-                ImGui::Text("%.2f ms", t.lastDurationMs); ImGui::NextColumn();
-                ImGui::Text("%zu", t.iterations); ImGui::NextColumn();
-            }
-            ImGui::Columns(1);
+        // ── Rolling sparkline histories ─────────────────────────────────────
+        ImGui::SeparatorText("History");
+
+        struct Plot { const char* lbl; const float* data; ImVec4 col; };
+        Plot plots[] = {
+            { "MAIN (ms)",      td.mainHistory.data(),      {0.30f, 0.65f, 1.00f, 1.f} },
+            { "RENDERING (ms)", td.renderingHistory.data(), {1.00f, 0.55f, 0.20f, 1.f} },
+            { "Frame (ms)",     td.frameHistory.data(),     {0.85f, 0.85f, 0.20f, 1.f} },
+        };
+
+        for (auto& p : plots)
+        {
+            float maxV = 0.1f;
+            for (int i = 0; i < ThreadDebugInfo::kHistorySize; ++i)
+                maxV = std::max(maxV, p.data[i]);
+            char overlay[32];
+            snprintf(overlay, sizeof(overlay), "%.2f ms", p.data[
+                (off + ThreadDebugInfo::kHistorySize - 1) % ThreadDebugInfo::kHistorySize]);
+            ImGui::PushStyleColor(ImGuiCol_PlotLines,
+                                  ImGui::ColorConvertFloat4ToU32(p.col));
+            ImGui::PlotLines(p.lbl, p.data, ThreadDebugInfo::kHistorySize,
+                             off, overlay, 0.f, maxV * 1.2f,
+                             ImVec2(avail, 45.f));
+            ImGui::PopStyleColor();
         }
 
         ImGui::End();

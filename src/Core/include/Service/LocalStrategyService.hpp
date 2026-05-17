@@ -36,7 +36,7 @@ namespace stnks
         int64_t               InsertStrategy(const Strategy& s) override;
         bool                  UpdateStrategy(const Strategy& s) override;
         bool                  DeleteStrategy(int64_t id) override;
-        bool                  CancelStrategy(int64_t id) override;
+        bool                  CancelStrategy(int64_t id, float exitPrice = 0.f) override;
         Strategy              GetStrategy(int64_t id) override;
         std::vector<Strategy> GetAllStrategies() override;
         std::vector<Strategy> GetActiveStrategies() override;

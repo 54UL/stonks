@@ -28,7 +28,10 @@ namespace stnks
                 parent_id    INTEGER NOT NULL DEFAULT 0,
                 priority     INTEGER NOT NULL DEFAULT 0,
                 quantity     REAL    NOT NULL DEFAULT 0,
-                entry_date   INTEGER NOT NULL DEFAULT 0
+                entry_date   INTEGER NOT NULL DEFAULT 0,
+                exit_price   REAL    NOT NULL DEFAULT 0,
+                closed_pnl   REAL    NOT NULL DEFAULT 0,
+                enabled      INTEGER NOT NULL DEFAULT 1
             );
         )";
 
@@ -38,21 +41,26 @@ namespace stnks
             "ALTER TABLE strategies ADD COLUMN parent_id  INTEGER NOT NULL DEFAULT 0;",
             "ALTER TABLE strategies ADD COLUMN priority   INTEGER NOT NULL DEFAULT 0;",
             "ALTER TABLE strategies ADD COLUMN quantity   REAL    NOT NULL DEFAULT 0;",
-            "ALTER TABLE strategies ADD COLUMN entry_date INTEGER NOT NULL DEFAULT 0;"
+            "ALTER TABLE strategies ADD COLUMN entry_date INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE strategies ADD COLUMN exit_price REAL    NOT NULL DEFAULT 0;",
+            "ALTER TABLE strategies ADD COLUMN closed_pnl REAL    NOT NULL DEFAULT 0;",
+            "ALTER TABLE strategies ADD COLUMN enabled    INTEGER NOT NULL DEFAULT 1;"
         };
 
         inline constexpr const char* kInsert = R"(
             INSERT INTO strategies
                 (symbol, direction, entry_price, take_profit, stop_loss, status,
-                 created_at, triggered_at, notes, type, parent_id, priority, quantity, entry_date)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                 created_at, triggered_at, notes, type, parent_id, priority, quantity, entry_date,
+                 exit_price, closed_pnl, enabled)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         )";
 
         inline constexpr const char* kUpdate = R"(
             UPDATE strategies
             SET symbol=?, direction=?, entry_price=?, take_profit=?, stop_loss=?,
                 status=?, created_at=?, triggered_at=?, notes=?,
-                type=?, parent_id=?, priority=?, quantity=?, entry_date=?
+                type=?, parent_id=?, priority=?, quantity=?, entry_date=?,
+                exit_price=?, closed_pnl=?, enabled=?
             WHERE id=?;
         )";
 
@@ -61,31 +69,31 @@ namespace stnks
 
         inline constexpr const char* kSelectAll =
             "SELECT id, symbol, direction, entry_price, take_profit, stop_loss, "
-            "status, created_at, triggered_at, notes, type, parent_id, priority, quantity, entry_date "
+            "status, created_at, triggered_at, notes, type, parent_id, priority, quantity, entry_date, exit_price, closed_pnl, enabled "
             "FROM strategies ORDER BY priority ASC, created_at DESC;";
 
         inline constexpr const char* kSelectBySymbol =
             "SELECT id, symbol, direction, entry_price, take_profit, stop_loss, "
-            "status, created_at, triggered_at, notes, type, parent_id, priority, quantity, entry_date "
+            "status, created_at, triggered_at, notes, type, parent_id, priority, quantity, entry_date, exit_price, closed_pnl, enabled "
             "FROM strategies WHERE symbol=? ORDER BY priority ASC, created_at DESC;";
 
         inline constexpr const char* kSelectActive =
             "SELECT id, symbol, direction, entry_price, take_profit, stop_loss, "
-            "status, created_at, triggered_at, notes, type, parent_id, priority, quantity, entry_date "
-            "FROM strategies WHERE status=0 ORDER BY priority ASC, created_at DESC;";
+            "status, created_at, triggered_at, notes, type, parent_id, priority, quantity, entry_date, exit_price, closed_pnl, enabled "
+            "FROM strategies WHERE status=0 AND enabled=1 ORDER BY priority ASC, created_at DESC;";
 
         inline constexpr const char* kSelectById =
             "SELECT id, symbol, direction, entry_price, take_profit, stop_loss, "
-            "status, created_at, triggered_at, notes, type, parent_id, priority, quantity, entry_date "
+            "status, created_at, triggered_at, notes, type, parent_id, priority, quantity, entry_date, exit_price, closed_pnl, enabled "
             "FROM strategies WHERE id=?;";
 
         inline constexpr const char* kSelectChildren =
             "SELECT id, symbol, direction, entry_price, take_profit, stop_loss, "
-            "status, created_at, triggered_at, notes, type, parent_id, priority, quantity, entry_date "
+            "status, created_at, triggered_at, notes, type, parent_id, priority, quantity, entry_date, exit_price, closed_pnl, enabled "
             "FROM strategies WHERE parent_id=? ORDER BY priority ASC;";
 
         inline constexpr const char* kMarkTriggered =
-            "UPDATE strategies SET status=?, triggered_at=? WHERE id=?;";
+            "UPDATE strategies SET status=?, triggered_at=?, exit_price=?, closed_pnl=? WHERE id=?;";
     }
 
     // SQLite-backed persistent storage for strategies.
@@ -113,8 +121,9 @@ namespace stnks
         Strategy              GetById(int64_t id);
         std::vector<Strategy> GetChildren(int64_t parentId);
 
-        // Mark a strategy as triggered
-        bool MarkTriggered(int64_t id, StrategyStatus status, int64_t triggeredAt);
+        // Mark a strategy as triggered (records exit price and frozen P/L%)
+        bool MarkTriggered(int64_t id, StrategyStatus status, int64_t triggeredAt,
+                           float exitPrice = 0.f, float closedPnlPct = 0.f);
 
         // Get resolved DB path (for diagnostics)
         const std::string& GetDbPath() const { return dbPath_; }

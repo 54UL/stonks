@@ -55,9 +55,16 @@ namespace stnks
         return store_->Delete(id);
     }
 
-    bool LocalStrategyService::CancelStrategy(int64_t id)
+    bool LocalStrategyService::CancelStrategy(int64_t id, float exitPrice)
     {
-        return store_->MarkTriggered(id, StrategyStatus::Cancelled, std::time(nullptr));
+        float pnlPct = 0.f;
+        if (exitPrice > 0.f)
+        {
+            auto s = store_->GetById(id);
+            if (s.entryPrice > 0.f)
+                pnlPct = s.UnrealizedPnLPercent(exitPrice);
+        }
+        return store_->MarkTriggered(id, StrategyStatus::Cancelled, std::time(nullptr), exitPrice, pnlPct);
     }
 
     Strategy LocalStrategyService::GetStrategy(int64_t id)

@@ -26,7 +26,7 @@ namespace stnks
         virtual int64_t               InsertStrategy(const Strategy& s) = 0;
         virtual bool                  UpdateStrategy(const Strategy& s) = 0;
         virtual bool                  DeleteStrategy(int64_t id) = 0;
-        virtual bool                  CancelStrategy(int64_t id) = 0;
+        virtual bool                  CancelStrategy(int64_t id, float exitPrice = 0.f) = 0;
         virtual Strategy              GetStrategy(int64_t id) = 0;
         virtual std::vector<Strategy> GetAllStrategies() = 0;
         virtual std::vector<Strategy> GetActiveStrategies() = 0;

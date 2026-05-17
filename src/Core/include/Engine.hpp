@@ -59,7 +59,6 @@ namespace stnks
         ThreadDebugInfo                 threadDebugInfo_;
         ThreadRegistry                  threadRegistry_;
         ecs::Registry                   registry_;
-        // std::shared_ptr<ResourceCache>  resourceCache_;
 
     public:
         explicit Engine(std::shared_ptr<App> appInstance);

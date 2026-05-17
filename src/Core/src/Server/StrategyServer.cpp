@@ -1,5 +1,6 @@
 #include <Server/StrategyServer.hpp>
 #include <Server/SentimentAction.hpp>
+#include <Market/MarketHours.hpp>
 #include <spdlog/spdlog.h>
 #include <algorithm>
 #include <set>
@@ -74,13 +75,33 @@ namespace stnks
                 lastSentimentCheck_ = std::chrono::steady_clock::now();
             }
 
+            // Adaptive poll interval based on market hours
+            // Crypto: 5s, Market open: config interval, Closed: 5min
+            auto symbols = GetActiveSymbols();
+            int adaptiveInterval = symbols.empty()
+                ? config_.pollIntervalSec
+                : MarketHours::GetServerPollInterval(symbols);
+
+            // Never go below configured minimum, but allow faster for crypto
+            int effectiveInterval = std::max(adaptiveInterval, 5);
+
+            // Log when interval changes significantly
+            if (effectiveInterval != lastEffectiveInterval_)
+            {
+                spdlog::info("[StrategyServer] Poll interval adjusted to {}s (symbols: {})",
+                             effectiveInterval, symbols.size());
+                lastEffectiveInterval_ = effectiveInterval;
+            }
+
             // Sleep in small increments so Stop() is responsive
             auto deadline = std::chrono::steady_clock::now()
-                          + std::chrono::seconds(config_.pollIntervalSec);
+                          + std::chrono::seconds(effectiveInterval);
 
             while (running_ && std::chrono::steady_clock::now() < deadline)
             {
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                if (idleCallback_)
+                    idleCallback_();
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
         }
 
@@ -103,12 +124,34 @@ namespace stnks
             return;
         }
 
-        spdlog::info("[StrategyServer] Checking {} symbol(s): ", symbols.size());
-        for (auto& sym : symbols)
-            spdlog::info("  - {}", sym);
+        // Filter: only process symbols whose market is active or near open/close
+        std::vector<std::string> processable;
+        processable.reserve(symbols.size());
 
-        // Fetch quotes synchronously (headless, no UI to block)
-        for (auto& symbol : symbols)
+        for (auto& sym : symbols)
+        {
+            auto state = MarketHours::GetState(sym);
+            if (MarketHours::ShouldProcess(sym))
+            {
+                processable.push_back(sym);
+                spdlog::info("  - {} [{}]", sym, MarketHours::StateToString(state));
+            }
+            else
+            {
+                spdlog::debug("  - {} [{}] SKIPPED (market closed)", sym, MarketHours::StateToString(state));
+            }
+        }
+
+        if (processable.empty())
+        {
+            spdlog::info("[StrategyServer] All {} symbol(s) skipped (markets closed)", symbols.size());
+            return;
+        }
+
+        spdlog::info("[StrategyServer] Processing {}/{} symbol(s)", processable.size(), symbols.size());
+
+        // Fetch quotes for processable symbols only
+        for (auto& symbol : processable)
         {
             market_->FetchQuoteAsync(symbol);
         }
@@ -118,7 +161,7 @@ namespace stnks
         auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(30);
         size_t received = 0;
 
-        while (received < symbols.size() &&
+        while (received < processable.size() &&
                std::chrono::steady_clock::now() < timeout &&
                running_)
         {
@@ -134,17 +177,21 @@ namespace stnks
                                  result.quote.candles.back().close);
 
                     CheckStrategies(result.symbol, result.quote);
+
+                    // Broadcast tick to connected clients
+                    if (tickCallback_)
+                        tickCallback_(result.symbol, result.quote);
                 }
                 ++received;
             });
 
-            if (received < symbols.size())
+            if (received < processable.size())
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
 
-        if (received < symbols.size())
+        if (received < processable.size())
             spdlog::warn("[StrategyServer] Timed out waiting for {} symbol(s)",
-                         symbols.size() - received);
+                         processable.size() - received);
     }
 
     void StrategyServer::CheckStrategies(const std::string& symbol, const StockQuote& quote)
@@ -165,6 +212,7 @@ namespace stnks
             bool tpHit = false;
             bool slHit = false;
 
+            // make them generic
             if (strat.direction == StrategyDirection::Long)
             {
                 tpHit = high >= strat.takeProfit;
@@ -175,14 +223,15 @@ namespace stnks
                 tpHit = low  <= strat.takeProfit;
                 slHit = high >= strat.stopLoss;
             }
-
+            // these calls as well
             if (tpHit)
             {
                 spdlog::info("[StrategyServer] TP HIT for {} #{} @ {:.2f} (target: {:.2f})",
                              symbol, strat.id, close, strat.takeProfit);
 
                 int64_t now = std::time(nullptr);
-                store_->MarkTriggered(strat.id, StrategyStatus::TPHit, now);
+                float pnlPct = strat.UnrealizedPnLPercent(close);
+                store_->MarkTriggered(strat.id, StrategyStatus::TPHit, now, close, pnlPct);
                 FireActions(strat, StrategyStatus::TPHit, close);
             }
             else if (slHit)
@@ -191,7 +240,8 @@ namespace stnks
                              symbol, strat.id, close, strat.stopLoss);
 
                 int64_t now = std::time(nullptr);
-                store_->MarkTriggered(strat.id, StrategyStatus::SLHit, now);
+                float pnlPct = strat.UnrealizedPnLPercent(close);
+                store_->MarkTriggered(strat.id, StrategyStatus::SLHit, now, close, pnlPct);
                 FireActions(strat, StrategyStatus::SLHit, close);
             }
         }
@@ -239,9 +289,21 @@ namespace stnks
         auto symbols = GetActiveSymbols();
         if (symbols.empty()) return;
 
-        spdlog::info("[StrategyServer] Running sentiment analysis for {} symbol(s)...", symbols.size());
+        // Only run sentiment for symbols whose market is active
+        std::vector<std::string> processable;
+        for (auto& sym : symbols)
+            if (MarketHours::ShouldProcess(sym))
+                processable.push_back(sym);
 
-        for (auto& symbol : symbols)
+        if (processable.empty())
+        {
+            spdlog::info("[StrategyServer] Sentiment analysis skipped (all markets closed)");
+            return;
+        }
+
+        spdlog::info("[StrategyServer] Running sentiment analysis for {} symbol(s)...", processable.size());
+
+        for (auto& symbol : processable)
         {
             if (!running_) break;
 

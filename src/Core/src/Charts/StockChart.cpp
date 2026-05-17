@@ -27,6 +27,7 @@ namespace stnks
             viewport_.visibleCount = std::min(viewport_.visibleCount, (int)data_.candles.size());
             viewport_.visibleStart = std::max(0, (int)data_.candles.size() - viewport_.visibleCount);
         }
+        yLocked_ = false;
         AutoScalePrice();
     }
 
@@ -117,7 +118,8 @@ namespace stnks
         viewport_.candleWidth   = std::max(1.f, stepPx * 0.72f);
         viewport_.candleSpacing = std::max(0.5f, stepPx * 0.28f);
 
-        AutoScalePrice();
+        if (!yLocked_)
+            AutoScalePrice();
 
         // Begin child
         ImGui::BeginChild(label, avail, false,
@@ -201,7 +203,7 @@ namespace stnks
 
     void StockChart::HandleInput()
     {
-        if (!ImGui::IsWindowHovered()) return;
+        if (!ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)) return;
 
         ImGuiIO& io = ImGui::GetIO();
 
@@ -210,7 +212,18 @@ namespace stnks
             // Consume the wheel so parent windows don't also scroll
             ImGui::SetWindowFocus();
 
-            if (io.KeyShift)
+            if (io.KeyCtrl)
+            {
+                // Ctrl+scroll: Y-axis scroll (pan price range up/down)
+                float priceRange = viewport_.priceMax - viewport_.priceMin;
+                float scrollAmount = priceRange * 0.05f;  // 5% of visible range per tick
+                if (io.MouseWheel > 0.f) scrollAmount = -scrollAmount;  // scroll up = higher prices
+
+                viewport_.priceMin += scrollAmount;
+                viewport_.priceMax += scrollAmount;
+                yLocked_ = true;
+            }
+            else if (io.KeyShift)
             {
                 // Proportional zoom anchored to mouse X position
                 float mouseRelX = (io.MousePos.x - chartLeft_) / chartWidth_;
@@ -296,22 +309,61 @@ namespace stnks
         float range = vp.priceMax - vp.priceMin;
         if (range <= 0.f) return;
 
-        // TradingView-style: sparse grid, ~4-7 horizontal lines max
-        float targetHLines = std::clamp(vp.chartSize.y / 100.f, 3.f, 7.f);
+        // ── Horizontal (price) grid ──────────────────────────────────────────
+
+        // Adaptive target: more lines as chart is taller, but clamped
+        float targetHLines = std::clamp(vp.chartSize.y / 80.f, 4.f, 10.f);
         float majorStep = NiceStep(range, targetHLines);
 
+        // Minimum pixel spacing between grid lines to prevent infinite density
+        constexpr float kMinGridPixelSpacing = 20.f;
+        float pixelsPerUnit = vp.chartSize.y / range;
+
+        // Clamp: if majorStep would produce lines closer than kMinGridPixelSpacing, increase it
+        while (majorStep * pixelsPerUnit < kMinGridPixelSpacing && majorStep < range)
+            majorStep *= 2.f;
+
+        // Minor step: subdivide major into 4 or 5 (whichever NiceStep prefers)
+        float minorStep = majorStep / 4.f;
+        // Prevent minor lines from being too dense
+        if (minorStep * pixelsPerUnit < kMinGridPixelSpacing)
+            minorStep = majorStep / 2.f;
+        bool showMinor = (minorStep * pixelsPerUnit >= kMinGridPixelSpacing);
+
+        // Draw minor horizontal lines first (behind major)
+        if (showMinor)
+        {
+            float startMinor = std::ceil(vp.priceMin / minorStep) * minorStep;
+            for (float p = startMinor; p <= vp.priceMax; p += minorStep)
+            {
+                // Skip positions that coincide with major lines
+                float nearestMajor = std::round(p / majorStep) * majorStep;
+                if (std::abs(p - nearestMajor) < minorStep * 0.3f) continue;
+
+                float y = vp.PriceToY(p);
+                if (y < vp.chartOrigin.y || y > vp.chartOrigin.y + vp.chartSize.y) continue;
+                drawList->AddLine(
+                    ImVec2(vp.chartOrigin.x, y),
+                    ImVec2(vp.chartOrigin.x + vp.chartSize.x, y),
+                    kGridMinorColor, 1.0f);
+            }
+        }
+
+        // Draw major horizontal lines
         float startMajor = std::ceil(vp.priceMin / majorStep) * majorStep;
         for (float p = startMajor; p <= vp.priceMax; p += majorStep)
         {
             float y = vp.PriceToY(p);
+            if (y < vp.chartOrigin.y || y > vp.chartOrigin.y + vp.chartSize.y) continue;
             drawList->AddLine(
                 ImVec2(vp.chartOrigin.x, y),
                 ImVec2(vp.chartOrigin.x + vp.chartSize.x, y),
                 kGridMajorColor, 1.0f);
         }
 
-        // Vertical grid lines — sparse: ~4-6 lines max
-        float targetVLines = std::clamp(chartWidth_ / 160.f, 3.f, 6.f);
+        // ── Vertical (time) grid ─────────────────────────────────────────────
+
+        float targetVLines = std::clamp(chartWidth_ / 140.f, 3.f, 8.f);
         int vStep = std::max(1, (int)std::round((float)viewport_.visibleCount / targetVLines));
 
         // Snap to nice candle intervals
@@ -323,9 +375,40 @@ namespace stnks
             niceVStep = c;
         }
 
+        // Minimum spacing for vertical lines too
+        float pixelsPerCandle = vp.candleWidth + vp.candleSpacing;
+        float vLineSpacing = niceVStep * pixelsPerCandle;
+        while (vLineSpacing < kMinGridPixelSpacing && niceVStep < viewport_.visibleCount)
+        {
+            niceVStep *= 2;
+            vLineSpacing = niceVStep * pixelsPerCandle;
+        }
+
         int end = std::min(vp.visibleStart + vp.visibleCount, (int)data_.candles.size());
         int firstAligned = vp.visibleStart - (vp.visibleStart % niceVStep) + niceVStep;
 
+        // Minor vertical lines (halfway between majors)
+        if (showMinor)
+        {
+            int minorVStep = niceVStep / 2;
+            if (minorVStep >= 1 && minorVStep * pixelsPerCandle >= kMinGridPixelSpacing)
+            {
+                int firstMinor = vp.visibleStart - (vp.visibleStart % minorVStep) + minorVStep;
+                for (int i = firstMinor; i < end; i += minorVStep)
+                {
+                    // Skip major positions
+                    if (niceVStep > 0 && (i % niceVStep) == 0) continue;
+                    int ri = i - vp.visibleStart;
+                    float x = vp.IndexToX(ri) + vp.candleWidth * 0.5f;
+                    drawList->AddLine(
+                        ImVec2(x, vp.chartOrigin.y),
+                        ImVec2(x, vp.chartOrigin.y + vp.chartSize.y),
+                        kGridMinorColor, 1.0f);
+                }
+            }
+        }
+
+        // Major vertical lines
         for (int i = firstAligned; i < end; i += niceVStep)
         {
             int ri = i - vp.visibleStart;
@@ -344,9 +427,15 @@ namespace stnks
         float range = vp.priceMax - vp.priceMin;
         if (range <= 0.f) return;
 
-        // Match grid density
-        float targetLines = std::clamp(vp.chartSize.y / 100.f, 3.f, 7.f);
+        // Match grid density (same logic as DrawGrid)
+        float targetLines = std::clamp(vp.chartSize.y / 80.f, 4.f, 10.f);
         float majorStep = NiceStep(range, targetLines);
+
+        // Clamp to prevent overly dense labels (same as grid)
+        constexpr float kMinLabelSpacing = 20.f;
+        float pixelsPerUnit = vp.chartSize.y / range;
+        while (majorStep * pixelsPerUnit < kMinLabelSpacing && majorStep < range)
+            majorStep *= 2.f;
 
         // Determine decimal places from step size
         int decimals = 2;
@@ -369,6 +458,12 @@ namespace stnks
             // Skip labels too close to top/bottom edges
             if (y < vp.chartOrigin.y + 6.f || y > vp.chartOrigin.y + vp.chartSize.y - 6.f)
                 continue;
+
+            // Small tick mark on the grid boundary
+            drawList->AddLine(
+                ImVec2(vp.chartOrigin.x + vp.chartSize.x, y),
+                ImVec2(vp.chartOrigin.x + vp.chartSize.x + 3.f, y),
+                kAxisTextColor, 1.0f);
 
             char buf[16];
             snprintf(buf, sizeof(buf), fmt, p);
@@ -397,15 +492,23 @@ namespace stnks
         int firstAligned = vp.visibleStart - (vp.visibleStart % niceStep) + niceStep;
 
         // Choose date format based on data granularity and zoom level
-        bool intraday = data_.interval.find('m') != std::string::npos ||
+        // "1m","5m","15m","30m" are intraday minutes; "1h" is intraday hours
+        // "1d" is daily; "1wk" is weekly; "1mo" is monthly
+        bool intraday = (data_.interval.find('m') != std::string::npos &&
+                         data_.interval.find("mo") == std::string::npos) ||
                         data_.interval.find('h') != std::string::npos;
+        bool monthly  = data_.interval.find("wk") != std::string::npos ||
+                        data_.interval.find("mo") != std::string::npos;
+
         const char* dateFmt;
         if (intraday)
             dateFmt = "%H:%M";
+        else if (monthly || viewport_.visibleCount > 90)
+            dateFmt = "%b '%y";
         else if (viewport_.visibleCount <= 30)
             dateFmt = "%b %d";
         else
-            dateFmt = "%m/%d";
+            dateFmt = "%b %d '%y";
 
         for (int i = firstAligned; i < end; i += niceStep)
         {
@@ -438,10 +541,11 @@ namespace stnks
 #else
             localtime_r(&ts, &tm_buf);
 #endif
-            bool intradayFocus = data_.interval.find('m') != std::string::npos ||
+            bool intradayFocus = (data_.interval.find('m') != std::string::npos &&
+                                  data_.interval.find("mo") == std::string::npos) ||
                                  data_.interval.find('h') != std::string::npos;
             char buf[32];
-            strftime(buf, sizeof(buf), intradayFocus ? "%b %d %H:%M" : "%b %d", &tm_buf);
+            strftime(buf, sizeof(buf), intradayFocus ? "%b %d %H:%M" : "%b %d, %Y", &tm_buf);
             ImVec2 textSize = ImGui::CalcTextSize(buf);
 
             float px = focusX - textSize.x * 0.5f - 4.f;
@@ -460,7 +564,10 @@ namespace stnks
     void StockChart::ResolveFocusedCandle()
     {
         viewport_.focusedCandle = -1;
-        if (!ImGui::IsWindowHovered()) return;
+
+        // Use permissive hover check: allow child windows (docked panels don't block)
+        if (!ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
+            return;
 
         ImVec2 mouse = ImGui::GetMousePos();
         if (mouse.x < chartLeft_ || mouse.x > chartLeft_ + chartWidth_) return;
@@ -476,7 +583,7 @@ namespace stnks
     void StockChart::DrawSyncedCrosshair(ImDrawList* drawList)
     {
         if (viewport_.focusedCandle < 0) return;
-        if (!ImGui::IsWindowHovered()) return;
+        if (!ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)) return;
 
         float focusX = viewport_.FocusedX();
         if (focusX < 0.f) return;
