@@ -1,0 +1,2 @@
+# stonks
+Finance client + server
