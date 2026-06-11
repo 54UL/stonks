@@ -9,6 +9,7 @@
 #include <spdlog/spdlog.h>
 #include <algorithm>
 #include <unordered_map>
+#include <cctype>
 #include <cmath>
 #include <ctime>
 #include <cstdlib>
@@ -17,50 +18,84 @@
 namespace stnks
 {
     UI::UI(const std::shared_ptr<Engine>& engine) : engine_(engine) {}
-    UI::~UI() = default;
+    UI::~UI()
+    {
+        // Stop RT polling before MarketService/HttpClient are destroyed
+        if (marketService_)
+            marketService_->StopAllPolling();
+    }
+
+    // ── BuildContext ────────────────────────────────────────────────────────────
+
+    void UI::BuildContext()
+    {
+        ctx_.engine          = engine_.get();
+        ctx_.service         = service_.get();
+        ctx_.marketService   = marketService_.get();
+        ctx_.newsService     = newsService_.get();
+        ctx_.analyzer        = analyzer_.get();
+
+        ctx_.strategies      = &cachedStrategies_;
+        ctx_.strategiesDirty = &strategiesDirty_;
+
+        ctx_.charts          = &charts_;
+        ctx_.detachedCharts  = &detachedCharts_;
+        ctx_.wizard          = &wizard_;
+
+        ctx_.graphEvents     = &graphEvents_;
+        ctx_.signalService   = &signalService_;
+
+        ctx_.recommendations = &cachedRecommendations_;
+        ctx_.warnings        = &cachedWarnings_;
+        ctx_.operations      = &cachedOperations_;
+        ctx_.insightsLoading = &insightsLoading_;
+        ctx_.insightRefreshTimer   = &insightRefreshTimer_;
+        ctx_.insightRefreshInterval = &insightRefreshInterval_;
+
+        ctx_.toasts          = &toasts_;
+        ctx_.telemetry       = &telemetry_;
+        ctx_.portfolioHistory = &portfolioHistory_;
+
+        ctx_.selectedStrategyId = &selectedStrategyId_;
+        ctx_.hoveredStrategyId  = &hoveredStrategyId_;
+        ctx_.showStrategyWizard = &showStrategyWizard_;
+        ctx_.showServerLauncher = &showServerLauncher_;
+
+        ctx_.sharedCrosshair = &sharedCrosshair_;
+
+        ctx_.liveTradingEnabled = &liveTradingEnabled_;
+        ctx_.aiAutoTrade        = &aiAutoTrade_;
+        ctx_.defaultBroker      = &defaultBroker_;
+        ctx_.lastSelectedSource = &lastSelectedSource_;
+        ctx_.eventTimeRange     = &eventTimeRange_;
+        ctx_.systemToggles      = &systemToggles_;
+        ctx_.envOverrides       = &envOverrides_;
+        ctx_.marketRefreshInterval = &marketRefreshInterval_;
+        ctx_.priceCacheInterval    = &priceCacheInterval_;
+
+        ctx_.getCurrentPrice = [this](const std::string& sym) { return GetCurrentPrice(sym); };
+        ctx_.fetchSymbol     = [this](const std::string& sym, const char* iv, const char* rng) {
+            FetchSymbol(sym, iv, rng);
+        };
+        ctx_.refreshInsights = [this]() { RefreshInsights(); };
+        ctx_.executeOrder    = [this](const std::string& sym, BrokerSource b, OrderSide s, float q, float p) {
+            return ExecuteOrder(sym, b, s, q, p);
+        };
+        ctx_.connectToServer = [this](const std::string& url) { ConnectToServer(url); };
+    }
+
+    // ── Init ────────────────────────────────────────────────────────────────────
 
     void UI::Init()
     {
-        ImGuiStyle& style = ImGui::GetStyle();
-        style.WindowRounding    = 4.0f;
-        style.FrameRounding     = 2.0f;
-        style.GrabRounding      = 2.0f;
-        style.ScrollbarRounding = 4.0f;
-        style.TabRounding       = 3.0f;
-        style.DockingSeparatorSize = 2.0f;
-
-        // When viewports are enabled, undocked windows are native OS windows — no rounding
-        ImGuiIO& io = ImGui::GetIO();
-        if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
-        {
-            style.WindowRounding = 0.0f;
-            style.Colors[ImGuiCol_WindowBg].w = 1.0f; // Opaque bg for OS windows
-        }
-
-        ImVec4* colors = style.Colors;
-        colors[ImGuiCol_WindowBg]       = ImVec4(0.08f, 0.08f, 0.10f, 1.00f);
-        colors[ImGuiCol_TitleBg]        = ImVec4(0.06f, 0.06f, 0.08f, 1.00f);
-        colors[ImGuiCol_TitleBgActive]  = ImVec4(0.10f, 0.12f, 0.18f, 1.00f);
-        colors[ImGuiCol_FrameBg]        = ImVec4(0.12f, 0.12f, 0.15f, 1.00f);
-        colors[ImGuiCol_Header]         = ImVec4(0.15f, 0.18f, 0.25f, 1.00f);
-        colors[ImGuiCol_HeaderHovered]  = ImVec4(0.20f, 0.25f, 0.35f, 1.00f);
-        colors[ImGuiCol_Button]         = ImVec4(0.15f, 0.18f, 0.25f, 1.00f);
-        colors[ImGuiCol_ButtonHovered]  = ImVec4(0.20f, 0.28f, 0.40f, 1.00f);
-        colors[ImGuiCol_Tab]            = ImVec4(0.10f, 0.12f, 0.18f, 1.00f);
-        colors[ImGuiCol_TabHovered]     = ImVec4(0.22f, 0.28f, 0.40f, 1.00f);
-        colors[ImGuiCol_TabActive]      = ImVec4(0.16f, 0.20f, 0.30f, 1.00f);
-        colors[ImGuiCol_DockingPreview] = ImVec4(0.22f, 0.35f, 0.55f, 0.70f);
-        colors[ImGuiCol_DockingEmptyBg] = ImVec4(0.06f, 0.06f, 0.08f, 1.00f);
-        colors[ImGuiCol_Separator]      = ImVec4(0.18f, 0.20f, 0.28f, 1.00f);
-        colors[ImGuiCol_SeparatorHovered] = ImVec4(0.25f, 0.35f, 0.55f, 1.00f);
-        colors[ImGuiCol_SeparatorActive]  = ImVec4(0.30f, 0.45f, 0.65f, 1.00f);
+        ui::ApplyDefaultTheme();
 
         httpClient_    = std::make_unique<HttpClient>(engine_->threadRegistry_);
         marketService_ = std::make_unique<MarketService>(*httpClient_, engine_->threadRegistry_);
 
         // Strategy service: check STNKS_SERVER_URL env for remote mode, else monolith
         const char* serverUrl = std::getenv("STNKS_SERVER_URL");
-        if (serverUrl==nullptr) serverUrl = "localhost:8099";
+
         if (serverUrl && serverUrl[0] != '\0')
         {
             service_ = std::make_unique<RemoteStrategyService>(*httpClient_, serverUrl);
@@ -75,47 +110,133 @@ namespace stnks
             spdlog::info("[UI] Monolith mode: embedded server");
         }
 
-        // News service (GNews API key from env)
+        // News service
         const char* gnewsKey = std::getenv("GNEWS_API_KEY");
-        // const char* gnewsKey = "58b092311e0d69f7cb02d73c1fa563b4";
-
         newsService_ = std::make_unique<NewsService>(
             *httpClient_, engine_->threadRegistry_,
             gnewsKey ? gnewsKey : "");
 
-        // AI analyzer (Claude API key from env)
+        // AI analyzer
         ClaudeAnalyzer::Config aiConfig;
         const char* claudeKey = std::getenv("CLAUDE_API_KEY");
         if (claudeKey) aiConfig.apiKey = claudeKey;
         analyzer_ = std::make_unique<ClaudeAnalyzer>(*httpClient_, aiConfig);
 
-        // Load persisted AI settings from globals
+        // Load persisted settings
         if (engine_->globals_)
         {
             std::string val = engine_->globals_->Get(gk::prefix::STATE, gk::key::AI_AUTO_TRADE);
             aiAutoTrade_ = (val == "1");
+            std::string ltVal = engine_->globals_->Get(gk::prefix::STATE, gk::key::LIVE_TRADING);
+            liveTradingEnabled_ = (ltVal == "1");
         }
+
+        // Initialize env var registry (populate current values, mark secrets)
+        auto regEnv = [this](const char* key, bool secret) {
+            const char* val = std::getenv(key);
+            envOverrides_.entries[key] = {val ? val : "", false, secret};
+        };
+        regEnv("CLAUDE_API_KEY",      true);
+        regEnv("GNEWS_API_KEY",       true);
+        regEnv("BINANCE_API_KEY",     true);
+        regEnv("BINANCE_API_SECRET",  true);
+        regEnv("BINANCE_SANDBOX",     false);
+        regEnv("GBM_CLIENT_ID",       true);
+        regEnv("GBM_CLIENT_SECRET",   true);
+        regEnv("GBM_REFRESH_TOKEN",   true);
+        regEnv("GBM_ACCOUNT_ID",      false);
+        regEnv("GBM_SANDBOX",         false);
+        regEnv("MT5_API_KEY",         true);
+        regEnv("MT5_ACCOUNT_ID",      false);
+        regEnv("STNKS_SERVER_URL",    false);
+        regEnv("ASSETS_STNKS",        false);
+
+        // Default system toggles based on key availability
+        systemToggles_.ai       = envOverrides_.IsSet("CLAUDE_API_KEY");
+        systemToggles_.news     = envOverrides_.IsSet("GNEWS_API_KEY");
+        systemToggles_.binance  = envOverrides_.IsSet("BINANCE_API_KEY");
+        systemToggles_.gbm      = envOverrides_.IsSet("GBM_CLIENT_ID");
+        systemToggles_.metaTrader = envOverrides_.IsSet("MT5_API_KEY");
+
+        // Build shared context and create all panels
+        BuildContext();
+        strategyTable_  = std::make_unique<StrategyTablePanel>(ctx_);
+        portfolioPanel_ = std::make_unique<PortfolioPanel>(ctx_);
+        signalsPanel_   = std::make_unique<MarketSignalsPanel>(ctx_);
+        recsPanel_      = std::make_unique<RecommendationsPanel>(ctx_);
+        warningsPanel_  = std::make_unique<MarketWarningsPanel>(ctx_);
+        aiOpsPanel_     = std::make_unique<AIOperationsPanel>(ctx_);
+        graphEventsPanel_ = std::make_unique<GraphEventsPanel>(ctx_);
+        dashboardPanel_ = std::make_unique<DashboardPanel>(ctx_);
+        serverLauncherPanel_ = std::make_unique<ServerLauncherPanel>(ctx_);
 
         spdlog::info("[UI] Initialized");
     }
 
     void UI::Update() {}
 
+    // ── Server Connection ─────────────────────────────────────────────────────
+
+    void UI::ConnectToServer(const std::string& serverUrl)
+    {
+        if (serverUrl.empty())
+        {
+            // Switch to monolith mode
+            LocalStrategyService::Config localCfg;
+            localCfg.server.pollIntervalSec = 60;
+            localCfg.startMonitoring = true;
+            service_ = std::make_unique<LocalStrategyService>(*httpClient_, engine_->threadRegistry_, localCfg);
+            spdlog::info("[UI] Switched to monolith mode");
+            PushToast("Switched to local (embedded) server", ui::kToastInfo);
+        }
+        else
+        {
+            service_ = std::make_unique<RemoteStrategyService>(*httpClient_, serverUrl);
+            spdlog::info("[UI] Connecting to remote server: {}", serverUrl);
+            PushToast("Connecting to " + serverUrl + "...", ui::kToastInfo);
+        }
+
+        // Update context pointer so all panels see the new service
+        ctx_.service = service_.get();
+        strategiesDirty_ = true;
+    }
+
+    // ── Async Result Draining ──────────────────────────────────────────────────
+
     void UI::DrainAsyncResults()
     {
         marketService_->DrainQuoteResults([this](QuoteFetchResult&& result) {
             telemetry_.chartRefreshes++;
+
+            if (!result.quote.candles.empty())
+                marketService_->UpdatePriceCache(result.symbol, result.quote.candles.back().close);
+
+            StockQuote detachedCopy = result.quote;
+
             for (auto& panel : charts_)
             {
-                // Background refresh — just update data, keep layers intact
+                // Background refresh
                 if (panel.symbol == result.symbol && panel.refreshing)
                 {
                     panel.quote      = std::move(result.quote);
                     panel.refreshing = false;
                     panel.chart.SetData(panel.quote);
+                    if (systemToggles_.graphEvents)
+                    {
+                        graphEvents_.Scan(panel.symbol, panel.quote);
+                        auto newEvs = graphEvents_.ConsumeNew();
+                        if (!newEvs.empty())
+                        {
+                            signalService_.IngestGraphEvents(newEvs);
+                            auto pm = graphEvents_.GetPatternMatches(panel.symbol);
+                            float price = GetCurrentPrice(panel.symbol);
+                            if (!pm.empty()) signalService_.IngestPatternMatches(panel.symbol, pm, price);
+                        }
+                    }
                     break;
                 }
 
+                // Initial load
                 if (panel.symbol == result.symbol && panel.loading)
                 {
                     panel.quote   = std::move(result.quote);
@@ -125,80 +246,57 @@ namespace stnks
                     auto& stratLayer = panel.chart.AddLayer<StrategyLayer>();
                     panel.chart.AddLayer<VolumeLayer>();
                     panel.chart.AddLayer<RSILayer>();
+                    panel.chart.AddLayer<MACDLayer>();
                     panel.chart.SetData(panel.quote);
-
-                    // Wire strategy callbacks for visual creation/editing
-                    stratLayer.onStrategyChanged = [this](const Strategy& s, bool isNew) {
-                        if (isNew)
+                    if (systemToggles_.graphEvents)
+                    {
+                        graphEvents_.Scan(panel.symbol, panel.quote);
+                        auto newEvs = graphEvents_.ConsumeNew();
+                        if (!newEvs.empty())
                         {
-                            telemetry_.strategySaves++;
-                            int64_t id = service_->InsertStrategy(s);
-                            if (id > 0)
-                                spdlog::info("[Strategy] Created #{} for {} (type={} entry={:.2f})",
-                                             id, s.symbol, StrategyTypeToString(s.type), s.entryPrice);
-                            else
-                                spdlog::error("[Strategy] Failed to insert for {} (server: {})",
-                                              s.symbol, service_->GetServerUrl());
+                            signalService_.IngestGraphEvents(newEvs);
+                            auto pm = graphEvents_.GetPatternMatches(panel.symbol);
+                            float price = GetCurrentPrice(panel.symbol);
+                            if (!pm.empty()) signalService_.IngestPatternMatches(panel.symbol, pm, price);
                         }
-                        else
-                        {
-                            bool ok = service_->UpdateStrategy(s);
-                            if (ok)
-                                spdlog::info("[Strategy] Updated #{} for {}", s.id, s.symbol);
-                            else
-                                spdlog::error("[Strategy] Failed to update #{}", s.id);
+                    }
 
-                            // Cancel any cell edit on the same row (gizmo takes priority)
-                            if (editCellRowId_ == s.id)
-                            {
-                                editCellRowId_ = -1;
-                                editCellCol_ = -1;
-                            }
-                        }
-                        strategiesDirty_ = true;
-                    };
+                    WireStrategyLayerCallbacks(stratLayer, panel.symbol);
+                    WireChartTearOutCallbacks(panel);
 
-                    stratLayer.onStrategyCancelled = [this](int64_t id) {
-                        // Find strategy symbol to get exit price
-                        float exitPrice = 0.f;
-                        for (auto& s : cachedStrategies_)
-                            if (s.id == id) { exitPrice = GetCurrentPrice(s.symbol); break; }
-                        service_->CancelStrategy(id, exitPrice);
-                        strategiesDirty_ = true;
-                        spdlog::info("[Strategy] Cancelled #{}", id);
-                    };
-
-                    stratLayer.onStrategySelected = [this](int64_t id) {
-                        selectedStrategyId_ = id;
-                        focusStrategiesTab_ = true;
-                        scrollToStrategy_   = true;
-                        showStrategies_     = true;
-
-                        // Select in table
-                        tableSelection_.clear();
-                        tableSelection_.insert(id);
-                        lastClickedId_ = id;
-
-                        // Also open in the dockable wizard panel
-                        for (auto& s : cachedStrategies_)
-                        {
-                            if (s.id == id)
-                            {
-                                wizard_.OpenEdit(s);
-                                showStrategyWizard_ = true;
-                                break;
-                            }
-                        }
-
-                        spdlog::info("[Strategy] Selected #{} for editing", id);
-                    };
-
-                    stratLayer.onEditingDismissed = [this]() {
-                        selectedStrategyId_ = -1;
-                    };
+                    // Apply pending strategy view focus
+                    if (pendingView_.active && pendingView_.symbol == panel.symbol)
+                    {
+                        panel.chart.FocusOnPriceRange(pendingView_.priceLo, pendingView_.priceHi);
+                        pendingView_.active = false;
+                    }
 
                     spdlog::info("[UI] Chart loaded for {}", panel.symbol);
                     break;
+                }
+            }
+
+            // Route data to detached charts
+            if (!detachedCopy.candles.empty())
+            {
+                for (auto& dc : detachedCharts_)
+                {
+                    if (dc.symbol == result.symbol)
+                    {
+                        dc.UpdateData(detachedCopy);
+                        if (systemToggles_.graphEvents)
+                        {
+                            graphEvents_.Scan(dc.symbol, detachedCopy);
+                            auto newEvs = graphEvents_.ConsumeNew();
+                            if (!newEvs.empty())
+                            {
+                                signalService_.IngestGraphEvents(newEvs);
+                                auto pm = graphEvents_.GetPatternMatches(dc.symbol);
+                                float price = GetCurrentPrice(dc.symbol);
+                                if (!pm.empty()) signalService_.IngestPatternMatches(dc.symbol, pm, price);
+                            }
+                        }
+                    }
                 }
             }
         });
@@ -208,7 +306,12 @@ namespace stnks
             searchPending_ = false;
         });
 
-        // Drain news results
+        DrainNewsResults();
+        DrainAnalysisResults();
+    }
+
+    void UI::DrainNewsResults()
+    {
         newsService_->DrainResults([this](NewsFetchResult&& result) {
             if (!result.ok)
             {
@@ -216,17 +319,62 @@ namespace stnks
                 return;
             }
 
-            // Feed news into analyzer
             std::vector<Strategy> activeForSymbol;
             for (auto& s : cachedStrategies_)
                 if (s.symbol == result.symbol && s.IsActive())
                     activeForSymbol.push_back(s);
 
-            analyzer_->AnalyzeAsync(result.symbol, result.articles,
-                                     activeForSymbol, engine_->threadRegistry_);
-        });
+            ChartContext chartCtx;
+            chartCtx.currentPrice = GetCurrentPrice(result.symbol);
 
-        // Drain analysis results
+            for (auto& panel : charts_)
+            {
+                if (panel.symbol != result.symbol || panel.quote.candles.empty()) continue;
+                auto& candles = panel.quote.candles;
+                auto& last = candles.back();
+                chartCtx.open24h  = candles.front().open;
+                chartCtx.high24h  = last.high;
+                chartCtx.low24h   = last.low;
+                for (auto& c : candles)
+                {
+                    if (c.high > chartCtx.high24h) chartCtx.high24h = c.high;
+                    if (c.low < chartCtx.low24h)   chartCtx.low24h  = c.low;
+                    chartCtx.volume24h += c.volume;
+                }
+                if (chartCtx.open24h > 0.f)
+                    chartCtx.changePct24h = ((last.close - chartCtx.open24h) / chartCtx.open24h) * 100.f;
+                break;
+            }
+
+            int64_t rangeSec = ui::EventTimeRangeSeconds(eventTimeRange_);
+            auto allEvs = graphEvents_.GetEvents(result.symbol);
+            if (rangeSec > 0)
+            {
+                int64_t cutoff = std::time(nullptr) - rangeSec;
+                for (auto& ev : allEvs)
+                    if (ev.timestamp >= cutoff) chartCtx.recentEvents.push_back(ev);
+            }
+            else
+                chartCtx.recentEvents = std::move(allEvs);
+
+            chartCtx.recentPatterns = graphEvents_.GetPatternMatches(result.symbol);
+
+            // Only run AI analysis if AI system is enabled
+            if (systemToggles_.ai)
+            {
+                // If news is disabled, pass empty articles so prompt excludes news section
+                std::vector<NewsArticle> emptyArticles;
+                const auto& articles = systemToggles_.news ? result.articles : emptyArticles;
+                analyzer_->AnalyzeAsyncWithContext(result.symbol, articles,
+                                                    activeForSymbol, chartCtx,
+                                                    engine_->threadRegistry_);
+            }
+        });
+    }
+
+    void UI::DrainAnalysisResults()
+    {
+        if (!systemToggles_.ai) return;
         analyzer_->DrainResults([this](AnalysisResult&& result) {
             insightsLoading_ = false;
             if (!result.ok)
@@ -235,7 +383,6 @@ namespace stnks
                 return;
             }
 
-            // Merge into cached insights (replace per-symbol)
             auto removeSymbol = [&](std::vector<MarketInsight>& vec) {
                 vec.erase(std::remove_if(vec.begin(), vec.end(),
                     [&](const MarketInsight& i) { return i.symbol == result.symbol; }),
@@ -249,7 +396,6 @@ namespace stnks
             for (auto& w : result.warnings)
                 cachedWarnings_.push_back(std::move(w));
 
-            // Collect operations (replace per-symbol)
             cachedOperations_.erase(
                 std::remove_if(cachedOperations_.begin(), cachedOperations_.end(),
                     [&](const AIOperation& op) { return op.symbol == result.symbol; }),
@@ -257,64 +403,193 @@ namespace stnks
             for (auto& op : result.operations)
                 cachedOperations_.push_back(std::move(op));
 
+            if (aiAutoTrade_)
+            {
+                for (auto& op : cachedOperations_)
+                {
+                    if (op.symbol != result.symbol || op.executed) continue;
+                    if (op.type == OperationType::Hold) continue;
+                    ExecuteAIOperation(op);
+                }
+            }
+
+            float price = GetCurrentPrice(result.symbol);
+            signalService_.IngestAIResult(result, price);
+
             spdlog::info("[AI] Got {} recs + {} warnings + {} ops for '{}'",
                          result.recommendations.size(), result.warnings.size(),
                          result.operations.size(), result.symbol);
         });
     }
 
+    // ── Strategy Layer Wiring ──────────────────────────────────────────────────
+
+    void UI::WireStrategyLayerCallbacks(StrategyLayer& stratLayer, const std::string& /*symbol*/)
+    {
+        stratLayer.onStrategyChanged = [this](const Strategy& s, bool isNew) {
+            if (isNew)
+            {
+                telemetry_.strategySaves++;
+                int64_t id = service_->InsertStrategy(s);
+                if (id > 0)
+                {
+                    spdlog::info("[Strategy] Created #{} for {} (type={} entry={:.2f})",
+                                 id, s.symbol, StrategyTypeToString(s.type), s.entryPrice);
+                    PushToast("Strategy created for " + s.symbol, ui::kToastSuccess);
+                }
+                else
+                {
+                    spdlog::error("[Strategy] Failed to insert for {} (server: {})",
+                                  s.symbol, service_->GetServerUrl());
+                    PushToast("Failed to create strategy for " + s.symbol, ui::kToastError);
+                }
+            }
+            else
+            {
+                bool ok = service_->UpdateStrategy(s);
+                if (ok)
+                    spdlog::info("[Strategy] Updated #{} for {}", s.id, s.symbol);
+                else
+                {
+                    spdlog::error("[Strategy] Failed to update #{}", s.id);
+                    PushToast("Failed to update strategy #" + std::to_string(s.id), ui::kToastError);
+                }
+
+                if (strategyTable_)
+                    strategyTable_->ClearCellEditForRow(s.id);
+            }
+            strategiesDirty_ = true;
+        };
+
+        stratLayer.onStrategyCancelled = [this](int64_t id) {
+            float exitPrice = 0.f;
+            for (auto& s : cachedStrategies_)
+            {
+                if (s.id == id)
+                {
+                    exitPrice = GetCurrentPrice(s.symbol);
+                    graphEvents_.RecordStrategyEvent(s, StrategyStatus::Cancelled, exitPrice);
+                    break;
+                }
+            }
+            service_->CancelStrategy(id, exitPrice);
+            strategiesDirty_ = true;
+            spdlog::info("[Strategy] Cancelled #{}", id);
+        };
+
+        stratLayer.onStrategySelected = [this](int64_t id) {
+            selectedStrategyId_ = id;
+            showStrategies_     = true;
+
+            if (strategyTable_)
+                strategyTable_->SelectSingle(id);
+
+            for (auto& s : cachedStrategies_)
+            {
+                if (s.id == id)
+                {
+                    wizard_.OpenEdit(s);
+                    showStrategyWizard_ = true;
+                    break;
+                }
+            }
+
+            spdlog::info("[Strategy] Selected #{} for editing", id);
+        };
+
+        stratLayer.onEditingDismissed = [this]() {
+            selectedStrategyId_ = -1;
+        };
+
+        stratLayer.onCreateRequested = [this](const std::string& symbol,
+            StrategyType type, StrategyDirection dir, float price, float visibleRange) {
+            wizard_.OpenCreate(symbol, type, dir, price, visibleRange);
+            showStrategyWizard_ = true;
+        };
+    }
+
+    void UI::WireChartTearOutCallbacks(ChartPanelData& panel)
+    {
+        std::string sym = panel.symbol;
+        panel.chart.onIndicatorTearOut = [this, sym](const std::string& indicatorName) {
+            for (auto& p : charts_)
+            {
+                if (p.symbol == sym)
+                {
+                    auto dc = DetachedChart::Create(sym, p.quote, indicatorName);
+                    WireDetachedChart(dc);
+                    detachedCharts_.push_back(std::move(dc));
+                    spdlog::info("[UI] Detached indicator '{}' for {}", indicatorName, sym);
+                    return;
+                }
+            }
+        };
+
+        panel.chart.onDuplicateChart = [this, sym]() {
+            for (auto& p : charts_)
+            {
+                if (p.symbol == sym)
+                {
+                    auto dc = DetachedChart::Create(sym, p.quote);
+                    WireDetachedChart(dc);
+                    detachedCharts_.push_back(std::move(dc));
+                    spdlog::info("[UI] Detached full chart for {}", sym);
+                    return;
+                }
+            }
+        };
+    }
+
+    // ── Strategy Trigger Checking ──────────────────────────────────────────────
+
     void UI::CheckStrategyTriggers()
     {
+        if (!systemToggles_.strategyMonitor) return;
+
         bool changed = false;
 
         for (auto& strat : cachedStrategies_)
         {
-            if (!strat.IsActive() || !strat.IsTPSL()) continue;
+            if (!strat.IsActive() || !strat.IsEnabled()) continue;
+            if (strat.takeProfit <= 0.f && strat.stopLoss <= 0.f) continue;
 
-            for (auto& panel : charts_)
+            float price = GetCurrentPrice(strat.symbol);
+
+            if (price <= 0.f)
             {
-                if (panel.symbol != strat.symbol || panel.quote.candles.empty()) continue;
-
-                float lastHigh  = panel.quote.candles.back().high;
-                float lastLow   = panel.quote.candles.back().low;
-                float lastClose = panel.quote.candles.back().close;
-
-                bool tpHit = false;
-                bool slHit = false;
-
-                if (strat.direction == StrategyDirection::Long)
+                for (auto& panel : charts_)
                 {
-                    tpHit = lastHigh >= strat.takeProfit;
-                    slHit = lastLow  <= strat.stopLoss;
+                    if (panel.symbol == strat.symbol && !panel.quote.candles.empty())
+                    {
+                        price = panel.quote.candles.back().close;
+                        break;
+                    }
                 }
-                else
-                {
-                    tpHit = lastLow  <= strat.takeProfit;
-                    slHit = lastHigh >= strat.stopLoss;
-                }
+            }
 
-                if (tpHit)
-                {
-                    int64_t now = std::time(nullptr);
-                    strat.status      = StrategyStatus::TPHit;
-                    strat.triggeredAt = now;
-                    service_->UpdateStrategy(strat);
-                    changed = true;
-                    spdlog::info("[Strategy] TP HIT for {} @ {:.2f} (target {:.2f})",
-                                strat.symbol, lastClose, strat.takeProfit);
-                }
-                else if (slHit)
-                {
-                    int64_t now = std::time(nullptr);
-                    strat.status      = StrategyStatus::SLHit;
-                    strat.triggeredAt = now;
-                    service_->UpdateStrategy(strat);
-                    changed = true;
-                    spdlog::info("[Strategy] SL HIT for {} @ {:.2f} (stop {:.2f})",
-                                strat.symbol, lastClose, strat.stopLoss);
-                }
+            if (price <= 0.f) continue;
 
-                break;
+            bool tpHit = false, slHit = false;
+            if (strat.direction == StrategyDirection::Long)
+            {
+                if (strat.takeProfit > 0.f) tpHit = price >= strat.takeProfit;
+                if (strat.stopLoss > 0.f)   slHit = price <= strat.stopLoss;
+            }
+            else
+            {
+                if (strat.takeProfit > 0.f) tpHit = price <= strat.takeProfit;
+                if (strat.stopLoss > 0.f)   slHit = price >= strat.stopLoss;
+            }
+
+            if (tpHit)
+            {
+                HandleTrigger(strat, StrategyStatus::TPHit, price);
+                changed = true;
+            }
+            else if (slHit)
+            {
+                HandleTrigger(strat, StrategyStatus::SLHit, price);
+                changed = true;
             }
         }
 
@@ -322,9 +597,40 @@ namespace stnks
             strategiesDirty_ = true;
     }
 
+    void UI::HandleTrigger(Strategy& strat, StrategyStatus trigger, float price)
+    {
+        int64_t now = std::time(nullptr);
+        strat.status       = trigger;
+        strat.triggeredAt  = now;
+        strat.exitPrice    = price;
+        strat.closedPnlPct = strat.UnrealizedPnLPercent(price);
+        if (!service_->UpdateStrategy(strat))
+            PushToast("Failed to save trigger for " + strat.symbol, ui::kToastError);
+        graphEvents_.RecordStrategyEvent(strat, trigger, price);
+        signalService_.IngestStrategyTrigger(strat, trigger, price);
+        ExecuteStrategyTrigger(strat, trigger, price);
+
+        const char* label = (trigger == StrategyStatus::TPHit) ? "TP HIT" : "SL HIT";
+        ImVec4 color = (trigger == StrategyStatus::TPHit) ? ui::kToastSuccess : ui::kToastError;
+
+        char toastBuf[128];
+        char pBuf[32];
+        FmtPrice(pBuf, sizeof(pBuf), price, strat.symbol);
+        snprintf(toastBuf, sizeof(toastBuf), "%s  %s @ %s  (%+.2f%%)",
+                 label, strat.symbol.c_str(), pBuf, strat.closedPnlPct);
+        PushToast(toastBuf, color, 8.f);
+
+        spdlog::info("[Strategy] {} {} @ {:.4f} (entry={:.4f})",
+                    label, strat.symbol, price, strat.entryPrice);
+    }
+
+    // ── Insight Refresh ────────────────────────────────────────────────────────
+
     void UI::RefreshInsights()
     {
-        // Collect unique symbols from active strategies
+        // Skip if both AI and News are disabled
+        if (!systemToggles_.ai && !systemToggles_.news) return;
+
         std::vector<std::string> symbols;
         for (auto& s : cachedStrategies_)
         {
@@ -336,114 +642,230 @@ namespace stnks
         if (symbols.empty()) return;
 
         insightsLoading_ = true;
-        for (auto& sym : symbols)
-            newsService_->FetchNewsAsync(sym, 5);
+
+        // Only fetch news if news system is enabled
+        if (systemToggles_.news)
+        {
+            for (auto& sym : symbols)
+                newsService_->FetchNewsAsync(sym, 5);
+        }
 
         spdlog::info("[UI] Refreshing insights for {} symbols", symbols.size());
     }
 
-    void UI::UpdateUI()
+    // ── TickUI ─────────────────────────────────────────────────────────────────
+
+    void UI::TickUI()
     {
-        DrainAsyncResults();
+        TickMarketRefresh();
+        TickStrategyReload();
+        TickPortfolioSampler();
+        CheckStrategyTriggers();
+        TickPriceCache();
+        TickInsightRefresh();
 
-        // Auto-refresh market data — per-panel adaptive intervals
-        if (!charts_.empty())
+        // Clear shared crosshair each frame
+        sharedCrosshair_.Clear();
+
+        // Push strategies to charts
+        PushDataToCharts();
+
+        ShowDockSpace();
+
+        wizard_.BeginFrame();
+
+        if (showDashboard_)       dashboardPanel_->Draw(&showDashboard_);
+        if (showServerLauncher_)  serverLauncherPanel_->Draw(&showServerLauncher_);
+        if (showThreadsDebugger_) ShowThreadsDebugger();
+        if (showStockCharts_)     ShowStockCharts();
+        if (showStrategyWizard_)  ShowStrategyWizard();
+        if (showStrategies_)      strategyTable_->DrawWindow(&showStrategies_);
+        if (showPortfolio_)       portfolioPanel_->Draw(&showPortfolio_);
+        if (showMarketSignals_)   signalsPanel_->Draw(&showMarketSignals_);
+        if (showRecommendations_) recsPanel_->Draw(&showRecommendations_);
+        if (showMarketWarnings_)  warningsPanel_->Draw(&showMarketWarnings_);
+        if (showAIOperations_)    aiOpsPanel_->Draw(&showAIOperations_);
+        if (showGraphEvents_)     graphEventsPanel_->Draw(&showGraphEvents_);
+
+        RenderDetachedCharts();
+
+        if (showOptions_) ShowOptions();
+
+        if (showStyleEditor_)
         {
-            float dt = ImGui::GetIO().DeltaTime;
-            for (auto& panel : charts_)
-            {
-                if (panel.loading || panel.refreshing || panel.quote.candles.empty())
-                    continue;
+            ImGui::Begin("Style Editor", &showStyleEditor_);
+            ImGui::ShowStyleEditor();
+            ImGui::End();
+        }
 
-                // Determine effective interval: market hours aware
+        RenderToasts();
+    }
+
+    void UI::TickMarketRefresh()
+    {
+        if (charts_.empty()) return;
+
+        float dt = ImGui::GetIO().DeltaTime;
+        for (auto& panel : charts_)
+        {
+            if (panel.loading || panel.quote.candles.empty())
+                continue;
+
+            auto& tf = kTimeframes[panel.timeframeIdx];
+
+            if (tf.realtime)
+            {
+                float cached = marketService_->GetCachedPrice(panel.symbol);
+                if (cached > 0.f && !panel.quote.candles.empty())
+                {
+                    auto& last = panel.quote.candles.back();
+                    last.close = cached;
+                    if (cached > last.high) last.high = cached;
+                    if (cached < last.low)  last.low  = cached;
+                    panel.chart.SetData(panel.quote);
+                }
+
+                if (!panel.refreshing)
+                {
+                    panel.refreshTimer -= dt;
+                    if (panel.refreshTimer <= 0.f)
+                    {
+                        panel.refreshing = true;
+                        marketService_->FetchQuoteAsync(panel.symbol, "1m", tf.range);
+                        panel.refreshTimer = 30.f;
+                    }
+                }
+            }
+            else
+            {
+                if (panel.refreshing) continue;
                 float effectiveInterval = (float)MarketHours::GetPollInterval(panel.symbol);
-                // Allow user override (manual refresh rate) as minimum floor
                 effectiveInterval = std::max(effectiveInterval, marketRefreshInterval_);
 
                 panel.refreshTimer -= dt;
                 if (panel.refreshTimer <= 0.f)
                 {
-                    auto& tf = kTimeframes[panel.timeframeIdx];
                     panel.refreshing = true;
                     marketService_->FetchQuoteAsync(panel.symbol, tf.interval, tf.range);
                     panel.refreshTimer = effectiveInterval;
                 }
             }
-            // Update global timer display (show minimum across panels)
-            float minTimer = 9999.f;
-            for (auto& p : charts_)
-                if (p.refreshTimer < minTimer) minTimer = p.refreshTimer;
-            marketRefreshTimer_ = minTimer;
         }
 
-        // Auto-refresh strategy timer (skip when disconnected to avoid blocking)
-        strategyRefreshTimer_ -= ImGui::GetIO().DeltaTime;
-        if (strategyRefreshTimer_ <= 0.f && service_->IsConnected())
+        // Auto-refresh detached charts
+        for (auto& dc : detachedCharts_)
         {
-            strategiesDirty_ = true;
-            strategyRefreshTimer_ = strategyRefreshInterval_;
-        }
-        else if (strategyRefreshTimer_ <= 0.f)
-        {
-            strategyRefreshTimer_ = 2.f; // Retry check in 2s when disconnected
+            if (dc.symbol.empty() || dc.refreshing || dc.quote.candles.empty())
+                continue;
+            float effectiveInterval = (float)MarketHours::GetPollInterval(dc.symbol);
+            effectiveInterval = std::max(effectiveInterval, marketRefreshInterval_);
+            dc.refreshTimer -= ImGui::GetIO().DeltaTime;
+            if (dc.refreshTimer <= 0.f)
+            {
+                dc.refreshing = true;
+                marketService_->FetchQuoteAsync(dc.symbol, "1d", "6mo");
+                dc.refreshTimer = effectiveInterval;
+            }
         }
 
-        // Reload strategies from service if dirty (skip if disconnected to avoid blocking)
+        // Update global timer display
+        float minTimer = 9999.f;
+        for (auto& p : charts_)
+            if (p.refreshTimer < minTimer) minTimer = p.refreshTimer;
+        marketRefreshTimer_ = minTimer;
+    }
+
+    void UI::TickStrategyReload()
+    {
         if (strategiesDirty_ && service_->IsConnected())
         {
             cachedStrategies_ = service_->GetAllStrategies();
             strategiesDirty_  = false;
         }
+    }
 
-        // Check if any active strategy's TP/SL was hit
-        CheckStrategyTriggers();
+    void UI::TickPortfolioSampler()
+    {
+        portfolioSampleTimer_ -= ImGui::GetIO().DeltaTime;
+        if (portfolioSampleTimer_ > 0.f) return;
 
-        // Auto-refresh insights timer
+        portfolioSampleTimer_ = ui::kPortfolioSampleSec;
+        float usdVal = 0.f, mxnVal = 0.f;
+        for (auto& s : cachedStrategies_)
+        {
+            if (!s.IsActive() || s.quantity <= 0.f) continue;
+            float price = GetCurrentPrice(s.symbol);
+            if (price <= 0.f) continue;
+            float val = s.EffectiveEntryPrice() * s.quantity + s.UnrealizedPnL(price);
+            if (MarketHours::ClassifySymbol(s.symbol) == MarketType::Mexico)
+                mxnVal += val;
+            else
+                usdVal += val;
+        }
+        portfolioHistory_.push_back({telemetry_.uptimeSec, usdVal, mxnVal});
+        if ((int)portfolioHistory_.size() > ui::kPortfolioMaxSamples)
+            portfolioHistory_.erase(portfolioHistory_.begin());
+    }
+
+    void UI::TickPriceCache()
+    {
+        priceCacheTimer_ -= ImGui::GetIO().DeltaTime;
+        if (priceCacheTimer_ > 0.f) return;
+
+        priceCacheTimer_ = priceCacheInterval_;
+
+        // Ensure all active strategy symbols have real-time polling running.
+        // StartRealtimePolling is a no-op if already polling for a symbol.
+        for (auto& s : cachedStrategies_)
+        {
+            if (s.symbol.empty() || !s.IsActive()) continue;
+            if (!marketService_->IsRealtimePolling(s.symbol))
+                marketService_->StartRealtimePolling(s.symbol);
+        }
+    }
+
+    void UI::TickInsightRefresh()
+    {
+        if (!systemToggles_.ai && !systemToggles_.news) return;
+
         insightRefreshTimer_ -= ImGui::GetIO().DeltaTime;
         if (insightRefreshTimer_ <= 0.f)
         {
             RefreshInsights();
             insightRefreshTimer_ = insightRefreshInterval_;
         }
+    }
 
-        // Push strategies to each chart's strategy layer
-        for (auto& panel : charts_)
-        {
+    void UI::PushDataToCharts()
+    {
+        auto wireChartData = [&](StockChart& chart, const std::string& symbol) {
+            chart.SetSharedCrosshair(&sharedCrosshair_);
+
             std::vector<Strategy> forSymbol;
             for (auto& s : cachedStrategies_)
-                if (s.symbol == panel.symbol)
+                if (s.symbol == symbol)
                     forSymbol.push_back(s);
-            panel.chart.SetStrategies(forSymbol);
+            chart.SetStrategies(forSymbol);
+            chart.SetEventMarkers(graphEvents_.GetEvents(symbol));
 
-            // Set current price for position P&L rendering
-            auto* sl = panel.chart.GetStrategyLayer();
+            auto* sl = chart.GetStrategyLayer();
             if (sl)
-                sl->SetCurrentPrice(GetCurrentPrice(panel.symbol));
-        }
+            {
+                sl->SetCurrentPrice(GetCurrentPrice(symbol));
+                sl->SetHighlightedId(hoveredStrategyId_);
+            }
+        };
 
-        ShowDockSpace();
+        for (auto& panel : charts_)
+            wireChartData(panel.chart, panel.symbol);
+        for (auto& dc : detachedCharts_)
+            wireChartData(dc.chart, dc.symbol);
+    }
 
-        // Reset wizard click detection for this frame
-        wizard_.BeginFrame();
-
-        if (showDashboard_)
-            ShowDashboard();
-        if (showThreadsDebugger_)
-            ShowThreadsDebugger();
-        if (showStockCharts_)
-            ShowStockCharts();
-        if (showStrategyWizard_)
-            ShowStrategyWizard();
-        if (showStrategies_)
-            ShowStrategies();
-        if (showPortfolio_)
-            ShowPortfolio();
-        if (showRecommendations_)
-            ShowRecommendations();
-        if (showMarketWarnings_)
-            ShowMarketWarnings();
-        if (showAIOperations_)
-            ShowAIOperations();
+    void UI::UpdateUI()
+    {
+        DrainAsyncResults();
+        TickUI();
     }
 
     // ── Dock Space & Menu ──────────────────────────────────────────────────────
@@ -474,7 +896,6 @@ namespace stnks
         ImGuiID dockspaceId = ImGui::GetID("StnksDockSpace");
         ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
 
-        // Build default layout on first run (matches UILAYOUT.png)
         if (!dockLayoutBuilt_)
         {
             dockLayoutBuilt_ = true;
@@ -482,1572 +903,147 @@ namespace stnks
             ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
             ImGui::DockBuilderSetNodeSize(dockspaceId, viewport->WorkSize);
 
-            // ┌──────────┬────────────────────────┬──────────────┐
-            // │Dashboard │ Stock Charts            │Strategy Wiz  │
-            // │          │                         │              │
-            // │          │                         ├──────────────┤
-            // │          │                         │Recom|Warn|AI │
-            // │          ├────────────────────────┤              │
-            // │          │ Strategies | Portfolio  │              │
-            // └──────────┴────────────────────────┴──────────────┘
-
-            // Split: left (18%) | rest
             ImGuiID dockLeft, dockRest;
             ImGui::DockBuilderSplitNode(dockspaceId, ImGuiDir_Left, 0.18f, &dockLeft, &dockRest);
 
-            // Split rest: center | right (22%)
             ImGuiID dockCenter, dockRight;
             ImGui::DockBuilderSplitNode(dockRest, ImGuiDir_Right, 0.22f, &dockRight, &dockCenter);
 
-            // Split center: top (charts, 62%) | bottom (strategies/portfolio, 38%)
             ImGuiID dockCenterTop, dockCenterBottom;
             ImGui::DockBuilderSplitNode(dockCenter, ImGuiDir_Down, 0.38f, &dockCenterBottom, &dockCenterTop);
 
-            // Split right: top (wizard, 55%) | bottom (AI panels, 45%)
             ImGuiID dockRightTop, dockRightBottom;
             ImGui::DockBuilderSplitNode(dockRight, ImGuiDir_Down, 0.45f, &dockRightBottom, &dockRightTop);
 
-            // Assign windows to docks
-            ImGui::DockBuilderDockWindow("Dashboard",        dockLeft);
-            ImGui::DockBuilderDockWindow("Threads Debugger", dockLeft);      // tabbed behind Dashboard
+            // ImGui::DockBuilderDockWindow("Dashboard",           dockLeft);
+            // ImGui::DockBuilderDockWindow("###GraphEvents",      dockLeft);
+            // ImGui::DockBuilderDockWindow("###MarketSignals",    dockLeft);
+            // ImGui::DockBuilderDockWindow("Server Launcher",     dockLeft);
+            // ImGui::DockBuilderDockWindow("Threads Debugger",    dockLeft);
 
-            ImGui::DockBuilderDockWindow("Stock Charts",     dockCenterTop);
-
-            ImGui::DockBuilderDockWindow("Strategies",       dockCenterBottom);
-            ImGui::DockBuilderDockWindow("Portfolio",         dockCenterBottom); // tabbed
-
-            ImGui::DockBuilderDockWindow("Strategy Wizard",  dockRightTop);
-
-            ImGui::DockBuilderDockWindow("Recommendations",  dockRightBottom);
-            ImGui::DockBuilderDockWindow("Market Warnings",  dockRightBottom); // tabbed
-            ImGui::DockBuilderDockWindow("AI Operations",    dockRightBottom); // tabbed
+            ImGui::DockBuilderDockWindow("Stock Charts",        dockCenterTop);
+            ImGui::DockBuilderDockWindow("Strategies",          dockCenterBottom);
+            ImGui::DockBuilderDockWindow("Portfolio",           dockCenterBottom);
+            ImGui::DockBuilderDockWindow("###StrategyWizard",   dockRightTop);
+            ImGui::DockBuilderDockWindow("Recommendations",     dockRightBottom);
+            ImGui::DockBuilderDockWindow("Market Warnings",     dockRightBottom);
+            ImGui::DockBuilderDockWindow("AI Operations",       dockRightBottom);
+            ImGui::DockBuilderDockWindow("Dashboard",           dockRightBottom);
+            ImGui::DockBuilderDockWindow("###GraphEvents",      dockRightBottom);
+            ImGui::DockBuilderDockWindow("###MarketSignals",    dockRightBottom);
+            ImGui::DockBuilderDockWindow("Server Launcher",     dockRightBottom);
+            ImGui::DockBuilderDockWindow("Threads Debugger",    dockRightBottom);
 
             ImGui::DockBuilderFinish(dockspaceId);
         }
 
         ShowMenuBar();
-
         ImGui::End();
     }
 
     void UI::ShowMenuBar()
     {
-        if (ImGui::BeginMenuBar())
+        if (!ImGui::BeginMenuBar()) return;
+
+        if (ImGui::BeginMenu("File"))
         {
-            if (ImGui::BeginMenu("File"))
-            {
-                if (ImGui::MenuItem("Exit"))
-                {
-                }
-                ImGui::EndMenu();
-            }
-
-            if (ImGui::BeginMenu("View"))
-            {
-                ImGui::MenuItem("Dashboard", nullptr, &showDashboard_);
-                ImGui::MenuItem("Stock Charts", nullptr, &showStockCharts_);
-                ImGui::MenuItem("Strategy Wizard", nullptr, &showStrategyWizard_);
-                ImGui::MenuItem("Strategies", nullptr, &showStrategies_);
-                ImGui::MenuItem("Portfolio", nullptr, &showPortfolio_);
-                ImGui::MenuItem("Recommendations", nullptr, &showRecommendations_);
-                ImGui::MenuItem("Market Warnings", nullptr, &showMarketWarnings_);
-                ImGui::MenuItem("AI Operations", nullptr, &showAIOperations_);
-                ImGui::Separator();
-                ImGui::MenuItem("Threads Debugger", nullptr, &showThreadsDebugger_);
-                ImGui::Separator();
-                if (ImGui::MenuItem("Reset Layout"))
-                {
-                    dockLayoutBuilt_ = false; // Rebuild on next frame
-                    // Re-enable all panels
-                    showDashboard_      = true;
-                    showStockCharts_    = true;
-                    showStrategyWizard_ = true;
-                    showStrategies_     = true;
-                    showPortfolio_      = true;
-                    showRecommendations_ = true;
-                    showMarketWarnings_ = true;
-                    showAIOperations_   = true;
-                }
-                ImGui::EndMenu();
-            }
-
-            if (ImGui::BeginMenu("Markets"))
-            {
-                ImGui::TextDisabled("-- US Market --");
-                for (auto& sym : kPresetUS)
-                {
-                    if (ImGui::MenuItem(sym))
-                        FetchSymbol(sym);
-                }
-                ImGui::Separator();
-                ImGui::TextDisabled("-- MEX Market --");
-                for (auto& sym : kPresetMEX)
-                {
-                    if (ImGui::MenuItem(sym))
-                        FetchSymbol(sym);
-                }
-                ImGui::EndMenu();
-            }
-
-            float fps = ImGui::GetIO().Framerate;
-            char fpsText[32];
-            snprintf(fpsText, sizeof(fpsText), "%.0f FPS", fps);
-            float textWidth = ImGui::CalcTextSize(fpsText).x;
-            ImGui::SameLine(ImGui::GetWindowWidth() - textWidth - 20.f);
-            ImGui::TextColored(
-                fps > 30.f ? ImVec4(0.4f, 0.8f, 0.4f, 1.f) : ImVec4(0.9f, 0.3f, 0.3f, 1.f),
-                "%s", fpsText);
-
-            ImGui::EndMenuBar();
-        }
-    }
-
-    // ── Strategies Tab ─────────────────────────────────────────────────────────
-
-    void UI::ShowStrategies()
-    {
-        // If a gizmo was clicked, focus this window
-        // if (focusStrategiesTab_)
-        // {
-        //     ImGui::SetNextWindowFocus();
-        //     focusStrategiesTab_ = false;
-        // }
-
-        ImGui::Begin("Strategies", &showStrategies_);
-
-        ImGui::TextDisabled("Right-click on a chart to create a strategy visually");
-        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 380.f);
-
-        if (ImGui::SmallButton("Export CSV"))
-            ExportCSV();
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Import CSV"))
-            ImportCSV();
-        ImGui::SameLine();
-
-        if (!tableSelection_.empty())
-        {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.2f, 0.2f, 1.f));
-            char delLabel[32];
-            snprintf(delLabel, sizeof(delLabel), "Del (%d)", (int)tableSelection_.size());
-            if (ImGui::SmallButton(delLabel))
-            {
-                for (int64_t id : tableSelection_)
-                {
-                    bool active = false;
-                    for (auto& s : cachedStrategies_)
-                        if (s.id == id && s.IsActive()) { active = true; break; }
-
-                    if (active)
-                    {
-                        float exitPrice = 0.f;
-                        for (auto& s : cachedStrategies_)
-                            if (s.id == id) { exitPrice = GetCurrentPrice(s.symbol); break; }
-                        service_->CancelStrategy(id, exitPrice);
-                        spdlog::info("[Strategy] Cancelled #{}", id);
-                    }
-                    else
-                    {
-                        service_->DeleteStrategy(id);
-                        spdlog::info("[Strategy] Deleted #{}", id);
-                    }
-                }
-                tableSelection_.clear();
-                selectedStrategyId_ = -1;
-                isEditingInline_ = false;
-                editCellRowId_ = -1;
-                strategiesDirty_ = true;
-            }
-            ImGui::PopStyleColor();
-            ImGui::SameLine();
-        }
-
-        if (ImGui::SmallButton("Refresh"))
-        {
-            strategiesDirty_ = true;
-            strategyRefreshTimer_ = strategyRefreshInterval_;
-        }
-
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(80.f);
-        ImGui::SliderFloat("##interval", &strategyRefreshInterval_, 5.f, 120.f, "%.0fs");
-        ImGui::SameLine();
-        ImGui::TextDisabled("(%.0fs)", strategyRefreshTimer_);
-
-        ImGui::Separator();
-
-        // When a strategy is selected from chart, force the Active tab
-        // bool forceActiveTab = (selectedStrategyId_ > 0);
-
-        if (ImGui::BeginTabBar("##StratTabs"))
-        {
-            // ImGuiTabItemFlags activeFlags = forceActiveTab
-            //     ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
-            ImGuiTabItemFlags activeFlags =  ImGuiTabItemFlags_None;
-            if (ImGui::BeginTabItem("Active", nullptr, activeFlags))
-            {
-                DrawStrategyTable([](const Strategy& s) { return s.IsActive(); });
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("Positions"))
-            {
-                DrawStrategyTable([](const Strategy& s) { return s.IsPosition() && s.IsActive(); });
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("AI"))
-            {
-                DrawStrategyTable([](const Strategy& s) { return s.IsAI() && s.IsActive(); });
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("Triggered"))
-            {
-                DrawStrategyTable([](const Strategy& s) {
-                    return s.status == StrategyStatus::TPHit || s.status == StrategyStatus::SLHit;
-                });
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("All"))
-            {
-                DrawStrategyTable([](const Strategy&) { return true; });
-                ImGui::EndTabItem();
-            }
-            ImGui::EndTabBar();
-        }
-
-        ImGui::End();
-    }
-
-    // ── Portfolio ───────────────────────────────────────────────────────────────
-
-    void UI::ShowPortfolio()
-    {
-        ImGui::Begin("Portfolio", &showPortfolio_);
-
-        // Aggregate holdings by symbol from active positions/strategies
-        struct Holding
-        {
-            std::string symbol;
-            float       totalQty      = 0.f;
-            float       avgEntry      = 0.f;
-            float       currentPrice  = 0.f;
-            float       totalCost     = 0.f;
-            float       marketValue   = 0.f;
-            float       pnl           = 0.f;
-            float       pnlPct        = 0.f;
-            int         activeStrats  = 0;
-            int         aiStrats      = 0;
-        };
-
-        std::vector<Holding> holdings;
-        std::unordered_map<std::string, size_t> symbolIdx;
-
-        for (auto& s : cachedStrategies_)
-        {
-            if (!s.IsActive()) continue;
-            if (s.quantity <= 0.f && !s.IsAI()) continue;
-
-            auto it = symbolIdx.find(s.symbol);
-            Holding* h;
-            if (it == symbolIdx.end())
-            {
-                symbolIdx[s.symbol] = holdings.size();
-                holdings.push_back({});
-                h = &holdings.back();
-                h->symbol = s.symbol;
-            }
-            else
-            {
-                h = &holdings[it->second];
-            }
-
-            h->totalCost += s.entryPrice * s.quantity;
-            h->totalQty  += s.quantity;
-            h->activeStrats++;
-            if (s.IsAI()) h->aiStrats++;
-        }
-
-        // Compute current values using per-strategy P/L (respects direction)
-        for (auto& h : holdings)
-        {
-            if (h.totalQty > 0.f)
-                h.avgEntry = h.totalCost / h.totalQty;
-
-            h.currentPrice = GetCurrentPrice(h.symbol);
-            if (h.currentPrice > 0.f)
-            {
-                // Sum P/L per strategy to respect Long/Short direction
-                h.pnl = 0.f;
-                for (auto& s : cachedStrategies_)
-                {
-                    if (!s.IsActive() || s.symbol != h.symbol || s.quantity <= 0.f) continue;
-                    h.pnl += s.UnrealizedPnL(h.currentPrice);
-                }
-                h.marketValue = h.totalCost + h.pnl;
-                h.pnlPct = (h.totalCost > 0.f) ? (h.pnl / h.totalCost) * 100.f : 0.f;
-            }
-        }
-
-        // Total portfolio value
-        float totalValue = 0.f, totalCost = 0.f, totalPnl = 0.f;
-        for (auto& h : holdings)
-        {
-            totalValue += h.marketValue;
-            totalCost  += h.totalCost;
-            totalPnl   += h.pnl;
-        }
-        float totalPnlPct = (totalCost > 0.f) ? (totalPnl / totalCost) * 100.f : 0.f;
-
-        // Header
-        ImVec4 totalCol = totalPnl >= 0.f
-            ? ImVec4(0.2f, 0.85f, 0.4f, 1.f)
-            : ImVec4(0.9f, 0.25f, 0.25f, 1.f);
-
-        ImGui::Text("GBM Portfolio");
-        ImGui::SameLine();
-        ImGui::TextColored(totalCol, "$%.2f", totalValue);
-        ImGui::SameLine();
-        ImGui::TextColored(totalCol, "(%+.2f%%)", totalPnlPct);
-        ImGui::Separator();
-
-        if (holdings.empty())
-        {
-            ImGui::TextDisabled("No active positions with quantity.");
-            ImGui::TextDisabled("Create Position or AI strategies with quantity > 0.");
-            ImGui::End();
-            return;
-        }
-
-        // Table
-        ImGui::PushStyleColor(ImGuiCol_TableRowBg,    ImVec4(0.09f, 0.09f, 0.12f, 1.f));
-        ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt, ImVec4(0.11f, 0.11f, 0.14f, 1.f));
-
-        if (ImGui::BeginTable("##Portfolio", 8,
-            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable |
-            ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_HighlightHoveredColumn))
-        {
-            ImGui::TableSetupColumn("Symbol",   ImGuiTableColumnFlags_WidthFixed, 90.f);
-            ImGui::TableSetupColumn("Qty",      ImGuiTableColumnFlags_WidthFixed, 60.f);
-            ImGui::TableSetupColumn("Avg Entry",ImGuiTableColumnFlags_WidthFixed, 80.f);
-            ImGui::TableSetupColumn("Price",    ImGuiTableColumnFlags_WidthFixed, 80.f);
-            ImGui::TableSetupColumn("Value",    ImGuiTableColumnFlags_WidthFixed, 90.f);
-            ImGui::TableSetupColumn("P/L",      ImGuiTableColumnFlags_WidthFixed, 90.f);
-            ImGui::TableSetupColumn("P/L%",     ImGuiTableColumnFlags_WidthFixed, 65.f);
-            ImGui::TableSetupColumn("Strategies",ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableHeadersRow();
-
-            for (int ri = 0; ri < (int)holdings.size(); ++ri)
-            {
-                auto& h = holdings[ri];
-                ImGui::TableNextRow();
-                ImGui::PushID(ri);
-
-                bool positive = h.pnl >= 0.f;
-                ImVec4 pnlCol = positive
-                    ? ImVec4(0.2f, 0.85f, 0.4f, 1.f)
-                    : ImVec4(0.9f, 0.25f, 0.25f, 1.f);
-
-                // Row hover via selectable
-                ImGui::TableNextColumn();
-                ImGui::Selectable("##prow", false,
-                    ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
-                    ImVec2(0, ImGui::GetTextLineHeightWithSpacing()));
-                bool rowHovered = ImGui::IsItemHovered();
-                if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && ImGui::GetIO().MouseClickedCount[0] == 2)
-                    FetchSymbol(h.symbol.c_str());
-                ImGui::SameLine(0.f, 0.f);
-
-                // Symbol color by market type
-                auto mkt = MarketHours::ClassifySymbol(h.symbol);
-                ImVec4 symCol;
-                switch (mkt)
-                {
-                case MarketType::US:      symCol = ImVec4(0.90f, 0.92f, 0.96f, 1.f); break;
-                case MarketType::Mexico:  symCol = ImVec4(0.95f, 0.75f, 0.25f, 1.f); break;
-                case MarketType::Crypto:  symCol = ImVec4(0.30f, 0.85f, 0.90f, 1.f); break;
-                default:                  symCol = ImVec4(0.70f, 0.70f, 0.70f, 1.f); break;
-                }
-                ImGui::TextColored(symCol, "%s", h.symbol.c_str());
-
-                // Qty
-                ImGui::TableNextColumn();
-                ImGui::Text("%.1f", h.totalQty);
-
-                // Avg Entry
-                ImGui::TableNextColumn();
-                ImGui::Text("$%.2f", h.avgEntry);
-
-                // Current Price
-                ImGui::TableNextColumn();
-                if (h.currentPrice > 0.f)
-                    ImGui::TextColored(pnlCol, "$%.2f", h.currentPrice);
-                else
-                    ImGui::TextDisabled("--");
-
-                // Market Value
-                ImGui::TableNextColumn();
-                ImGui::Text("$%.2f", h.marketValue);
-
-                // P/L
-                ImGui::TableNextColumn();
-                ImGui::TextColored(pnlCol, "%+.2f", h.pnl);
-
-                // P/L%
-                ImGui::TableNextColumn();
-                ImGui::TextColored(pnlCol, "%+.2f%%", h.pnlPct);
-
-                // Strategies info
-                ImGui::TableNextColumn();
-                ImGui::TextDisabled("%d active", h.activeStrats);
-                if (h.aiStrats > 0)
-                {
-                    ImGui::SameLine();
-                    ImGui::TextColored(ImVec4(0.9f, 0.5f, 1.f, 1.f), "(%d AI)", h.aiStrats);
-                }
-
-                if (rowHovered)
-                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1,
-                        IM_COL32(30, 40, 60, 160));
-
-                ImGui::PopID();
-            }
-
-            ImGui::EndTable();
-        }
-        ImGui::PopStyleColor(2);
-
-        ImGui::End();
-    }
-
-    // ── Sorting helper ──────────────────────────────────────────────────────────
-
-    void UI::SortStrategies(std::vector<Strategy*>& ptrs)
-    {
-        if (tableSortCol_ == SortColumn::None) return;
-
-        auto cmp = [&](const Strategy* a, const Strategy* b) -> bool {
-            int result = 0;
-            switch (tableSortCol_)
-            {
-            case SortColumn::Symbol: result = a->symbol.compare(b->symbol); break;
-            case SortColumn::Type:   result = (int)a->type - (int)b->type; break;
-            case SortColumn::Dir:    result = (int)a->direction - (int)b->direction; break;
-            case SortColumn::Entry:  result = (a->entryPrice < b->entryPrice) ? -1 : (a->entryPrice > b->entryPrice) ? 1 : 0; break;
-            case SortColumn::TP:     result = (a->takeProfit < b->takeProfit) ? -1 : (a->takeProfit > b->takeProfit) ? 1 : 0; break;
-            case SortColumn::SL:     result = (a->stopLoss < b->stopLoss) ? -1 : (a->stopLoss > b->stopLoss) ? 1 : 0; break;
-            case SortColumn::Qty:    result = (a->quantity < b->quantity) ? -1 : (a->quantity > b->quantity) ? 1 : 0; break;
-            case SortColumn::RR:     result = (a->RiskReward() < b->RiskReward()) ? -1 : (a->RiskReward() > b->RiskReward()) ? 1 : 0; break;
-            case SortColumn::PnL:   {
-                auto getPnl = [this](const Strategy* s) -> float {
-                    if (s->IsActive())
-                    {
-                        float p = GetCurrentPrice(s->symbol);
-                        return (p > 0.f && s->entryPrice > 0.f) ? s->UnrealizedPnLPercent(p) : 0.f;
-                    }
-                    if (s->closedPnlPct != 0.f) return s->closedPnlPct;
-                    if (s->exitPrice > 0.f && s->entryPrice > 0.f)
-                        return s->UnrealizedPnLPercent(s->exitPrice);
-                    return 0.f;
-                };
-                float pnlA = getPnl(a), pnlB = getPnl(b);
-                result = (pnlA < pnlB) ? -1 : (pnlA > pnlB) ? 1 : 0;
-            } break;
-            case SortColumn::Exit:
-                result = (a->exitPrice < b->exitPrice) ? -1 : (a->exitPrice > b->exitPrice) ? 1 : 0; break;
-            case SortColumn::Status: result = (int)a->status - (int)b->status; break;
-            case SortColumn::Notes:  result = a->notes.compare(b->notes); break;
-            default: break;
-            }
-            return tableSortAsc_ ? (result < 0) : (result > 0);
-        };
-        std::sort(ptrs.begin(), ptrs.end(), cmp);
-    }
-
-    // ── Cell editing helpers ────────────────────────────────────────────────────
-
-    void UI::StartCellEdit(const Strategy& s, int col)
-    {
-        editCellRowId_ = s.id;
-        editCellCol_   = col;
-        cellEditBuf_[0] = '\0';
-
-        // Pre-fill the buffer/float based on column
-        switch (col)
-        {
-        case 0:  snprintf(cellEditBuf_, sizeof(cellEditBuf_), "%s", s.symbol.c_str()); break;
-        case 3:  cellEditFloat_ = s.entryPrice; break;
-        case 4:  cellEditFloat_ = s.takeProfit; break;
-        case 5:  cellEditFloat_ = s.stopLoss; break;
-        case 6:  cellEditFloat_ = s.quantity; break;
-        case 11: snprintf(cellEditBuf_, sizeof(cellEditBuf_), "%s", s.notes.c_str()); break;
-        }
-    }
-
-    void UI::CommitCellEdit(Strategy& s, int col)
-    {
-        switch (col)
-        {
-        case 0:  s.symbol = cellEditBuf_; break;
-        case 1:  break; // Type — handled by combo directly
-        case 2:  break; // Direction — handled by combo directly
-        case 3:  s.entryPrice = cellEditFloat_; break;
-        case 4:  s.takeProfit = cellEditFloat_; break;
-        case 5:  s.stopLoss   = cellEditFloat_; break;
-        case 6:  s.quantity   = cellEditFloat_; break;
-        case 11: s.notes = cellEditBuf_; break;
-        }
-
-        service_->UpdateStrategy(s);
-        strategiesDirty_ = true;
-        editCellRowId_ = -1;
-        editCellCol_   = -1;
-        spdlog::info("[Strategy] Cell edit committed for #{}", s.id);
-    }
-
-    float UI::GetCurrentPrice(const std::string& symbol) const
-    {
-        // In remote mode, prefer live ENet price from server
-        auto* remote = dynamic_cast<RemoteStrategyService*>(service_.get());
-        if (remote)
-        {
-            float livePrice = remote->GetLivePrice(symbol);
-            if (livePrice > 0.f) return livePrice;
-        }
-
-        // Fallback to local chart data
-        for (auto& panel : charts_)
-        {
-            if (panel.symbol == symbol && !panel.quote.candles.empty())
-                return panel.quote.candles.back().close;
-        }
-        return 0.f;
-    }
-
-    // ── Main strategy table (Excel-like) ────────────────────────────────────────
-
-    void UI::DrawStrategyTable(const std::function<bool(const Strategy&)>& filter)
-    {
-        // Build filtered + sorted pointer list
-        std::vector<Strategy*> filtered;
-        for (auto& s : cachedStrategies_)
-            if (filter(s)) filtered.push_back(&s);
-
-        if (filtered.empty())
-        {
-            ImGui::TextDisabled("No strategies");
-            return;
-        }
-
-        SortStrategies(filtered);
-
-        // ── Toolbar ────────────────────────────────────────────────────────
-        {
-            int selCount = (int)tableSelection_.size();
-            if (selCount > 0)
-                ImGui::Text("%d selected", selCount);
-            else
-                ImGui::TextDisabled("Select rows with checkboxes");
-
-            ImGui::SameLine(200.f);
-
-            bool hasSel = selCount > 0;
-            if (!hasSel) ImGui::BeginDisabled();
-
-            if (ImGui::SmallButton("Enable"))
-            {
-                for (auto& s : cachedStrategies_)
-                    if (tableSelection_.count(s.id)) { s.enabled = true; service_->UpdateStrategy(s); }
-                strategiesDirty_ = true;
-            }
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Disable"))
-            {
-                for (auto& s : cachedStrategies_)
-                    if (tableSelection_.count(s.id)) { s.enabled = false; service_->UpdateStrategy(s); }
-                strategiesDirty_ = true;
-            }
-            ImGui::SameLine();
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.3f, 0.3f, 1.f));
-            if (ImGui::SmallButton("Delete Selected"))
-            {
-                for (int64_t id : tableSelection_)
-                {
-                    bool active = false;
-                    for (auto& s : cachedStrategies_)
-                        if (s.id == id && s.IsActive()) { active = true; break; }
-                    if (active)
-                    {
-                        float ep = 0.f;
-                        for (auto& s : cachedStrategies_)
-                            if (s.id == id) { ep = GetCurrentPrice(s.symbol); break; }
-                        service_->CancelStrategy(id, ep);
-                    }
-                    else
-                        service_->DeleteStrategy(id);
-                }
-                tableSelection_.clear();
-                strategiesDirty_ = true;
-            }
-            ImGui::PopStyleColor();
-
-            if (!hasSel) ImGui::EndDisabled();
-
-            ImGui::SameLine(ImGui::GetContentRegionAvail().x - 60.f);
-            if (ImGui::SmallButton("Clear"))
-                tableSelection_.clear();
-        }
-
-        ImGui::Spacing();
-
-        // ── Table ──────────────────────────────────────────────────────────
-        ImGuiTableFlags tableFlags =
-            ImGuiTableFlags_Borders |
-            ImGuiTableFlags_RowBg |
-            ImGuiTableFlags_Resizable |
-            ImGuiTableFlags_Reorderable |
-            ImGuiTableFlags_Sortable |
-            ImGuiTableFlags_ScrollY |
-            ImGuiTableFlags_Hideable |
-            ImGuiTableFlags_HighlightHoveredColumn;
-
-        // Push table row colors for better hover/selection UX
-        ImGui::PushStyleColor(ImGuiCol_TableRowBg,        ImVec4(0.09f, 0.09f, 0.12f, 1.f));
-        ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt,     ImVec4(0.11f, 0.11f, 0.14f, 1.f));
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered,     ImVec4(0.22f, 0.28f, 0.42f, 0.8f));
-        ImGui::PushStyleColor(ImGuiCol_HeaderActive,      ImVec4(0.26f, 0.34f, 0.52f, 0.9f));
-
-        constexpr int kColCount = 15;
-        if (!ImGui::BeginTable("##StratTable", kColCount, tableFlags, ImVec2(0.f, 0.f)))
-        {
-            ImGui::PopStyleColor(4);
-            return;
-        }
-
-        constexpr auto F = ImGuiTableColumnFlags_WidthFixed;
-        ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("##chk",   F | ImGuiTableColumnFlags_NoSort | ImGuiTableColumnFlags_NoResize, 18.f);
-        ImGui::TableSetupColumn("Symbol",  F | ImGuiTableColumnFlags_DefaultSort, 90.f);
-        ImGui::TableSetupColumn("Type",    F, 55.f);
-        ImGui::TableSetupColumn("Dir",     F, 50.f);
-        ImGui::TableSetupColumn("Entry",   F, 75.f);
-        ImGui::TableSetupColumn("Price",   F | ImGuiTableColumnFlags_NoSort, 75.f);  // Current price
-        ImGui::TableSetupColumn("TP",      F, 75.f);
-        ImGui::TableSetupColumn("SL",      F, 75.f);
-        ImGui::TableSetupColumn("Qty",     F, 50.f);
-        ImGui::TableSetupColumn("R:R",     F | ImGuiTableColumnFlags_NoSort, 45.f);
-        ImGui::TableSetupColumn("P/L%",    F, 60.f);
-        ImGui::TableSetupColumn("Exit",    F, 70.f);
-        ImGui::TableSetupColumn("Status",  F, 70.f);
-        ImGui::TableSetupColumn("Notes",   ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("",        F | ImGuiTableColumnFlags_NoSort, 80.f);  // Actions
-
-        // Custom header row with select-all checkbox
-        ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
-        for (int col = 0; col < kColCount; ++col)
-        {
-            ImGui::TableSetColumnIndex(col);
-            if (col == 0)
-            {
-                // Select-all checkbox
-                bool allSelected = !filtered.empty() && tableSelection_.size() == filtered.size();
-                bool someSelected = !tableSelection_.empty() && !allSelected;
-                if (someSelected)
-                    ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, true);
-                if (ImGui::Checkbox("##all", &allSelected))
-                {
-                    if (allSelected)
-                        for (auto* p : filtered) tableSelection_.insert(p->id);
-                    else
-                        tableSelection_.clear();
-                }
-                if (someSelected)
-                    ImGui::PopItemFlag();
-            }
-            else
-            {
-                ImGui::TableHeader(ImGui::TableGetColumnName(col));
-            }
-        }
-
-        // Handle ImGui sort specs (offset by 1 for checkbox column)
-        if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs())
-        {
-            if (specs->SpecsDirty && specs->SpecsCount > 0)
-            {
-                auto& spec = specs->Specs[0];
-                // Column indices: 0=check, 1=sym, 2=type, 3=dir, 4=entry, 5=price, 6=tp, 7=sl, 8=qty, 9=rr, 10=pnl, 11=exit, 12=status, 13=notes, 14=actions
-                static const SortColumn colMap[] = {
-                    SortColumn::None, SortColumn::Symbol, SortColumn::Type, SortColumn::Dir,
-                    SortColumn::Entry, SortColumn::None, SortColumn::TP, SortColumn::SL,
-                    SortColumn::Qty, SortColumn::RR, SortColumn::PnL,
-                    SortColumn::Exit, SortColumn::Status, SortColumn::Notes, SortColumn::None
-                };
-                if (spec.ColumnIndex >= 0 && spec.ColumnIndex < 15)
-                    tableSortCol_ = colMap[spec.ColumnIndex];
-                else
-                    tableSortCol_ = SortColumn::None;
-                tableSortAsc_ = (spec.SortDirection == ImGuiSortDirection_Ascending);
-                specs->SpecsDirty = false;
-                SortStrategies(filtered);
-            }
-        }
-
-        int64_t deleteId = -1;
-        std::string viewSymbol;
-
-        ImGuiIO& io = ImGui::GetIO();
-
-        for (int rowIdx = 0; rowIdx < (int)filtered.size(); ++rowIdx)
-        {
-            Strategy& s = *filtered[rowIdx];
-            bool isInSelection = tableSelection_.count(s.id) > 0;
-            bool isCellEditing = (editCellRowId_ == s.id);
-            bool isActiveEdit  = (s.id == selectedStrategyId_);
-
-            ImGui::TableNextRow();
-            ImGui::PushID(static_cast<int>(s.id));
-
-            // Dim disabled strategies
-            if (!s.enabled)
-                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.5f);
-
-            // Row background colors based on state
-            if (isActiveEdit)
-            {
-                // Currently being edited (from chart) — distinct gold highlight
-                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1,
-                    IM_COL32(60, 55, 20, 200));
-            }
-            else if (isInSelection)
-            {
-                // Multi-selected — blue tint
-                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1,
-                    IM_COL32(35, 55, 100, 180));
-            }
-
-            // Scroll to selected row (one-shot from chart gizmo)
-            if (s.id == selectedStrategyId_ && scrollToStrategy_)
-            {
-                ImGui::SetScrollHereY(0.5f);
-                scrollToStrategy_ = false;
-            }
-
-            // Helper lambda: handle click on any cell for row selection
-            auto HandleRowClick = [&]() {
-                if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
-                {
-                    if (io.KeyCtrl)
-                    {
-                        if (isInSelection) tableSelection_.erase(s.id);
-                        else tableSelection_.insert(s.id);
-                    }
-                    else if (io.KeyShift && lastClickedId_ > 0)
-                    {
-                        bool inRange = false;
-                        for (auto* p : filtered)
-                        {
-                            if (p->id == lastClickedId_ || p->id == s.id)
-                            {
-                                inRange = !inRange;
-                                tableSelection_.insert(p->id);
-                                if (!inRange) break;
-                            }
-                            else if (inRange)
-                                tableSelection_.insert(p->id);
-                        }
-                    }
-                    else
-                    {
-                        tableSelection_.clear();
-                        tableSelection_.insert(s.id);
-                        selectedStrategyId_ = s.id;
-                    }
-                    lastClickedId_ = s.id;
-                }
-            };
-
-            auto HandleCellDblClick = [&](int colIdx) {
-                if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-                    StartCellEdit(s, colIdx);
-            };
-
-            // ── Col 0: Checkbox (with row-span selectable for hover) ──
-            ImGui::TableNextColumn();
-            {
-                // Invisible selectable for row hover highlight
-                ImGui::Selectable("##rowsel", isInSelection,
-                    ImGuiSelectableFlags_SpanAllColumns |
-                    ImGuiSelectableFlags_AllowOverlap,
-                    ImVec2(0, ImGui::GetTextLineHeightWithSpacing()));
-                bool rowHovered = ImGui::IsItemHovered();
-                if (rowHovered && !isInSelection && !isActiveEdit)
-                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1,
-                        IM_COL32(28, 38, 58, 140));
-                ImGui::SameLine(0.f, 0.f);
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX());
-
-                bool checked = isInSelection;
-                if (ImGui::Checkbox("##chk", &checked))
-                {
-                    if (checked) tableSelection_.insert(s.id);
-                    else tableSelection_.erase(s.id);
-                    lastClickedId_ = s.id;
-                }
-            }
-
-            // ── Col 1: Symbol (color-coded by market) ──
-            ImGui::TableNextColumn();
-            if (isCellEditing && editCellCol_ == 0)
-            {
-                ImGui::SetNextItemWidth(-1);
-                ImGui::SetKeyboardFocusHere();
-                if (ImGui::InputText("##sym", cellEditBuf_, sizeof(cellEditBuf_),
-                    ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll))
-                    CommitCellEdit(s, 0);
-                if (!ImGui::IsItemActive() && !ImGui::IsItemFocused())
-                { editCellRowId_ = -1; editCellCol_ = -1; }
-            }
-            else
-            {
-                // Color by market type: US=white, MX=amber, Crypto=cyan
-                auto mkt = MarketHours::ClassifySymbol(s.symbol);
-                ImVec4 symCol;
-                switch (mkt)
-                {
-                case MarketType::US:      symCol = ImVec4(0.90f, 0.92f, 0.96f, 1.f); break;
-                case MarketType::Mexico:  symCol = ImVec4(0.95f, 0.75f, 0.25f, 1.f); break;
-                case MarketType::Crypto:  symCol = ImVec4(0.30f, 0.85f, 0.90f, 1.f); break;
-                default:                  symCol = ImVec4(0.70f, 0.70f, 0.70f, 1.f); break;
-                }
-                ImGui::TextColored(symCol, "%s", s.symbol.c_str());
-                HandleRowClick();
-                HandleCellDblClick(0);
-            }
-
-            // ── Col 2: Type ──
-            ImGui::TableNextColumn();
-            if (isCellEditing && editCellCol_ == 1)
-            {
-                int typeVal = static_cast<int>(s.type);
-                ImGui::SetNextItemWidth(-1);
-                if (ImGui::Combo("##type", &typeVal, "TP/SL\0Position\0AI\0"))
-                {
-                    s.type = static_cast<StrategyType>(typeVal);
-                    service_->UpdateStrategy(s);
-                    strategiesDirty_ = true;
-                    editCellRowId_ = -1; editCellCol_ = -1;
-                }
-            }
-            else
-            {
-                if (s.IsAI())
-                    ImGui::TextColored(ImVec4(0.9f, 0.5f, 1.f, 1.f), "AI");
-                else if (s.IsPosition())
-                    ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.f, 1.f), "POS");
-                else
-                    ImGui::TextDisabled("TP/SL");
-                HandleRowClick();
-                HandleCellDblClick(1);
-            }
-
-            // ── Col 3: Direction ──
-            ImGui::TableNextColumn();
-            if (isCellEditing && editCellCol_ == 2)
-            {
-                int dir = static_cast<int>(s.direction);
-                ImGui::SetNextItemWidth(-1);
-                if (ImGui::Combo("##dir", &dir, "Long\0Short\0"))
-                {
-                    s.direction = static_cast<StrategyDirection>(dir);
-                    service_->UpdateStrategy(s);
-                    strategiesDirty_ = true;
-                    editCellRowId_ = -1; editCellCol_ = -1;
-                }
-            }
-            else
-            {
-                if (s.direction == StrategyDirection::Long)
-                    ImGui::TextColored(ImVec4(0.15f, 0.65f, 0.36f, 1.f), "LONG");
-                else
-                    ImGui::TextColored(ImVec4(0.84f, 0.19f, 0.19f, 1.f), "SHORT");
-                HandleRowClick();
-                HandleCellDblClick(2);
-            }
-
-            // ── Col 4: Entry ──
-            ImGui::TableNextColumn();
-            if (isCellEditing && editCellCol_ == 3)
-            {
-                ImGui::SetNextItemWidth(-1);
-                ImGui::SetKeyboardFocusHere();
-                if (ImGui::InputFloat("##entry", &cellEditFloat_, 0.f, 0.f, "%.2f",
-                    ImGuiInputTextFlags_EnterReturnsTrue))
-                    CommitCellEdit(s, 3);
-                if (!ImGui::IsItemActive() && !ImGui::IsItemFocused())
-                { editCellRowId_ = -1; editCellCol_ = -1; }
-            }
-            else
-            {
-                ImGui::Text("%.2f", s.entryPrice);
-                HandleRowClick();
-                HandleCellDblClick(3);
-            }
-
-            // ── Col 5: Current Price (virtual, read-only) ──
-            ImGui::TableNextColumn();
-            {
-                float curPrice = GetCurrentPrice(s.symbol);
-                if (curPrice > 0.f)
-                {
-                    bool up = curPrice >= s.entryPrice;
-                    ImVec4 col = up ? ImVec4(0.15f, 0.65f, 0.36f, 1.f)
-                                    : ImVec4(0.84f, 0.19f, 0.19f, 1.f);
-                    ImGui::TextColored(col, "%.2f", curPrice);
-                }
-                else
-                    ImGui::TextDisabled("-");
-            }
-            HandleRowClick();
-
-            // ── Col 6: TP ──
-            ImGui::TableNextColumn();
-            if (isCellEditing && editCellCol_ == 4)
-            {
-                ImGui::SetNextItemWidth(-1);
-                ImGui::SetKeyboardFocusHere();
-                if (ImGui::InputFloat("##tp", &cellEditFloat_, 0.f, 0.f, "%.2f",
-                    ImGuiInputTextFlags_EnterReturnsTrue))
-                    CommitCellEdit(s, 4);
-                if (!ImGui::IsItemActive() && !ImGui::IsItemFocused())
-                { editCellRowId_ = -1; editCellCol_ = -1; }
-            }
-            else
-            {
-                if (s.takeProfit > 0.f)
-                    ImGui::TextColored(ImVec4(0.15f, 0.65f, 0.36f, 1.f), "%.2f", s.takeProfit);
-                else
-                    ImGui::TextDisabled("-");
-                HandleRowClick();
-                HandleCellDblClick(4);
-            }
-
-            // ── Col 7: SL ──
-            ImGui::TableNextColumn();
-            if (isCellEditing && editCellCol_ == 5)
-            {
-                ImGui::SetNextItemWidth(-1);
-                ImGui::SetKeyboardFocusHere();
-                if (ImGui::InputFloat("##sl", &cellEditFloat_, 0.f, 0.f, "%.2f",
-                    ImGuiInputTextFlags_EnterReturnsTrue))
-                    CommitCellEdit(s, 5);
-                if (!ImGui::IsItemActive() && !ImGui::IsItemFocused())
-                { editCellRowId_ = -1; editCellCol_ = -1; }
-            }
-            else
-            {
-                if (s.stopLoss > 0.f)
-                    ImGui::TextColored(ImVec4(0.84f, 0.19f, 0.19f, 1.f), "%.2f", s.stopLoss);
-                else
-                    ImGui::TextDisabled("-");
-                HandleRowClick();
-                HandleCellDblClick(5);
-            }
-
-            // ── Col 8: Qty ──
-            ImGui::TableNextColumn();
-            if (isCellEditing && editCellCol_ == 6)
-            {
-                ImGui::SetNextItemWidth(-1);
-                ImGui::SetKeyboardFocusHere();
-                if (ImGui::InputFloat("##qty", &cellEditFloat_, 0.f, 0.f, "%.2f",
-                    ImGuiInputTextFlags_EnterReturnsTrue))
-                    CommitCellEdit(s, 6);
-                if (!ImGui::IsItemActive() && !ImGui::IsItemFocused())
-                { editCellRowId_ = -1; editCellCol_ = -1; }
-            }
-            else
-            {
-                if (s.quantity > 0.f)
-                    ImGui::Text("%.0f", s.quantity);
-                else
-                    ImGui::TextDisabled("-");
-                HandleRowClick();
-                HandleCellDblClick(6);
-            }
-
-            // ── Col 9: R:R ──
-            ImGui::TableNextColumn();
-            if (s.IsTPSL() && s.stopLoss > 0.f && s.takeProfit > 0.f)
-            {
-                float rr = s.RiskReward();
-                ImVec4 rrCol = rr >= 2.f ? ImVec4(0.15f, 0.65f, 0.36f, 1.f)
-                             : rr >= 1.f ? ImVec4(0.9f, 0.8f, 0.2f, 1.f)
-                                         : ImVec4(0.84f, 0.19f, 0.19f, 1.f);
-                ImGui::TextColored(rrCol, "%.1f", rr);
-            }
-            else
-                ImGui::TextDisabled("-");
-            HandleRowClick();
-
-            // ── Col 10: P/L% ──
-            ImGui::TableNextColumn();
-            {
-                float pnlPct = 0.f;
-                bool hasPnl = false;
-
-                if (!s.IsActive())
-                {
-                    // Closed: use frozen P/L, or recompute from exitPrice if missing
-                    if (s.closedPnlPct != 0.f)
-                    {
-                        pnlPct = s.closedPnlPct;
-                        hasPnl = true;
-                    }
-                    else if (s.exitPrice > 0.f && s.entryPrice > 0.f)
-                    {
-                        // Fallback: compute from exit price (for legacy data)
-                        pnlPct = s.UnrealizedPnLPercent(s.exitPrice);
-                        hasPnl = true;
-                    }
-                }
-                else
-                {
-                    // Active: compute live P/L from current market price
-                    float curPrice = GetCurrentPrice(s.symbol);
-                    if (curPrice > 0.f && s.entryPrice > 0.f)
-                    {
-                        pnlPct = s.UnrealizedPnLPercent(curPrice);
-                        hasPnl = true;
-                    }
-                }
-
-                if (hasPnl)
-                {
-                    ImVec4 pnlCol = pnlPct >= 0.f
-                        ? ImVec4(0.15f, 0.65f, 0.36f, 1.f)
-                        : ImVec4(0.84f, 0.19f, 0.19f, 1.f);
-                    ImGui::TextColored(pnlCol, "%+.1f%%", pnlPct);
-
-                    if (ImGui::IsItemHovered())
-                    {
-                        if (s.IsActive())
-                        {
-                            float curPrice = GetCurrentPrice(s.symbol);
-                            float pnlAbs = s.UnrealizedPnL(curPrice);
-                            ImGui::SetTooltip("P/L: %+.2f\nCurrent: %.2f\nEntry: %.2f",
-                                pnlAbs, curPrice, s.entryPrice);
-                        }
-                        else
-                        {
-                            ImGui::SetTooltip("Closed P/L (frozen)\nExit: %.2f\nEntry: %.2f",
-                                s.exitPrice, s.entryPrice);
-                        }
-                    }
-                }
-                else
-                    ImGui::TextDisabled("-");
-            }
-            HandleRowClick();
-
-            // ── Col 11: Exit Price ──
-            ImGui::TableNextColumn();
-            if (s.exitPrice > 0.f)
-                ImGui::Text("%.2f", s.exitPrice);
-            else
-                ImGui::TextDisabled("-");
-            HandleRowClick();
-
-            // ── Col 12: Status ──
-            ImGui::TableNextColumn();
-            if (isCellEditing && editCellCol_ == 10)
-            {
-                int st = static_cast<int>(s.status);
-                ImGui::SetNextItemWidth(-1);
-                if (ImGui::Combo("##status", &st, "Active\0TP Hit\0SL Hit\0Cancelled\0"))
-                {
-                    s.status = static_cast<StrategyStatus>(st);
-                    if (s.status != StrategyStatus::Active && s.triggeredAt == 0)
-                        s.triggeredAt = std::time(nullptr);
-                    service_->UpdateStrategy(s);
-                    strategiesDirty_ = true;
-                    editCellRowId_ = -1; editCellCol_ = -1;
-                }
-            }
-            else
-            {
-                if (!s.enabled)
-                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.f), "Disabled");
-                else switch (s.status)
-                {
-                case StrategyStatus::Active:
-                    ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.f, 1.f), "Active");
-                    break;
-                case StrategyStatus::TPHit:
-                    ImGui::TextColored(ImVec4(0.15f, 0.65f, 0.36f, 1.f), "TP Hit");
-                    break;
-                case StrategyStatus::SLHit:
-                    ImGui::TextColored(ImVec4(0.84f, 0.19f, 0.19f, 1.f), "SL Hit");
-                    break;
-                case StrategyStatus::Cancelled:
-                    ImGui::TextDisabled("Cancelled");
-                    break;
-                }
-                HandleRowClick();
-                HandleCellDblClick(10);
-            }
-
-            // ── Col 13: Notes ──
-            ImGui::TableNextColumn();
-            if (isCellEditing && editCellCol_ == 11)
-            {
-                ImGui::SetNextItemWidth(-1);
-                ImGui::SetKeyboardFocusHere();
-                if (ImGui::InputText("##notes", cellEditBuf_, sizeof(cellEditBuf_),
-                    ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll))
-                    CommitCellEdit(s, 11);
-                if (!ImGui::IsItemActive() && !ImGui::IsItemFocused())
-                { editCellRowId_ = -1; editCellCol_ = -1; }
-            }
-            else
-            {
-                if (!s.notes.empty())
-                    ImGui::TextWrapped("%s", s.notes.c_str());
-                else
-                    ImGui::TextDisabled("-");
-                HandleRowClick();
-                HandleCellDblClick(11);
-            }
-
-            // ── Col 14: Actions ──
-            ImGui::TableNextColumn();
-            if (ImGui::SmallButton("View"))
-                viewSymbol = s.symbol;
-            ImGui::SameLine();
-            if (ImGui::SmallButton("X"))
-                deleteId = s.id;
-
-            if (!s.enabled) ImGui::PopStyleVar(); // Alpha
-
-            ImGui::PopID();
-        }
-
-        ImGui::EndTable();
-        ImGui::PopStyleColor(4); // table row colors
-
-        // Process deferred delete
-        if (deleteId > 0)
-        {
-            tableSelection_.erase(deleteId);
-            if (deleteId == selectedStrategyId_)
-            { isEditingInline_ = false; selectedStrategyId_ = -1; }
-            if (deleteId == editCellRowId_)
-            { editCellRowId_ = -1; editCellCol_ = -1; }
-
-            bool wasActive = false;
-            for (auto& s : cachedStrategies_)
-                if (s.id == deleteId && s.IsActive()) { wasActive = true; break; }
-
-            if (wasActive)
-            {
-                float exitPrice = 0.f;
-                for (auto& s : cachedStrategies_)
-                    if (s.id == deleteId) { exitPrice = GetCurrentPrice(s.symbol); break; }
-                service_->CancelStrategy(deleteId, exitPrice);
-            }
-            else
-                service_->DeleteStrategy(deleteId);
-            strategiesDirty_ = true;
-            telemetry_.strategyDeletes++;
-        }
-        if (!viewSymbol.empty())
-            FetchSymbol(viewSymbol);
-    }
-
-    // ── CSV Export / Import ──────────────────────────────────────────────────────
-
-    void UI::ExportCSV()
-    {
-        auto dest = pfd::save_file("Export Strategies CSV", "strategies.csv",
-            {"CSV Files", "*.csv", "All Files", "*"});
-
-        std::string path = dest.result();
-        if (path.empty()) return;
-
-        FILE* f = fopen(path.c_str(), "w");
-        if (!f)
-        {
-            spdlog::error("[CSV] Failed to open '{}' for writing", path);
-            return;
-        }
-
-        // Header (LOL FIX THIS AI TRASH XDXD)
-        fprintf(f, "id,symbol,type,direction,entry_price,take_profit,stop_loss,quantity,status,priority,parent_id,exit_price,closed_pnl,notes\n");
-
-        // Rows: export selected if any, otherwise all
-        auto& source = tableSelection_.empty() ? cachedStrategies_ : cachedStrategies_;
-        for (auto& s : source)
-        {
-            if (!tableSelection_.empty() && tableSelection_.count(s.id) == 0)
-                continue;
-
-            // Escape notes (double quotes for CSV)
-            std::string escapedNotes = s.notes;
-            size_t pos = 0;
-            while ((pos = escapedNotes.find('"', pos)) != std::string::npos)
-            {
-                escapedNotes.insert(pos, "\"");
-                pos += 2;
-            }
-
-            fprintf(f, "%lld,%s,%d,%d,%.4f,%.4f,%.4f,%.4f,%d,%d,%lld,%.4f,%.4f,\"%s\"\n",
-                (long long)s.id, s.symbol.c_str(),
-                (int)s.type, (int)s.direction,
-                s.entryPrice, s.takeProfit, s.stopLoss, s.quantity,
-                (int)s.status, s.priority, (long long)s.parentId,
-                s.exitPrice, s.closedPnlPct,
-                escapedNotes.c_str());
-        }
-
-        fclose(f);
-        spdlog::info("[CSV] Exported to '{}'", path);
-    }
-
-    void UI::ImportCSV()
-    {
-        auto src = pfd::open_file("Import Strategies CSV", "",
-            {"CSV Files", "*.csv", "All Files", "*"});
-
-        auto paths = src.result();
-        if (paths.empty()) return;
-
-        //TODO: TF IS THIS PICE OF SHIT USE IFSTREAM
-        FILE* f = fopen(paths[0].c_str(), "r");
-        if (!f)
-        {
-            spdlog::error("[CSV] Failed to open '{}' for reading", paths[0]);
-            return;
-        }
-
-        char line[1024];
-        int lineNum = 0;
-        int imported = 0;
-
-        while (fgets(line, sizeof(line), f))
-        {
-            lineNum++;
-            if (lineNum == 1) continue; // Skip header
-
-            Strategy s;
-            char symbol[128] = "";
-            char notes[512] = "";
-            int type = 0, dir = 0, status = 0, priority = 0;
-            long long parentId = 0;
-            long long id = 0;
-
-            // Parse CSV line (handles quoted notes at the end)
-            int parsed = sscanf(line, "%lld,%127[^,],%d,%d,%f,%f,%f,%f,%d,%d,%lld",
-                &id, symbol, &type, &dir,
-                &s.entryPrice, &s.takeProfit, &s.stopLoss, &s.quantity,
-                &status, &priority, &parentId);
-
-            if (parsed < 7) continue; // At minimum: id, symbol, type, dir, entry, tp, sl
-
-            s.symbol    = symbol;
-            s.type      = static_cast<StrategyType>(type);
-            s.direction = static_cast<StrategyDirection>(dir);
-            s.status    = static_cast<StrategyStatus>(status);
-            s.priority  = priority;
-            s.parentId  = parentId;
-            s.createdAt = std::time(nullptr);
-
-            // Extract notes from the quoted field at the end
-            const char* quoteStart = strchr(line, '"');
-            if (quoteStart)
-            {
-                quoteStart++; // skip opening quote
-                const char* quoteEnd = strrchr(quoteStart, '"');
-                if (quoteEnd && quoteEnd > quoteStart)
-                    s.notes = std::string(quoteStart, quoteEnd);
-            }
-
-            int64_t newId = service_->InsertStrategy(s);
-            if (newId > 0) imported++;
-        }
-
-        fclose(f);
-        strategiesDirty_ = true;
-        spdlog::info("[CSV] Imported {} strategies from '{}'", imported, paths[0]);
-    }
-
-    // ── Recommendations ─────────────────────────────────────────────────────────
-
-    void UI::ShowRecommendations()
-    {
-        ImGui::Begin("Recommendations", &showRecommendations_);
-
-        // Header
-        if (ImGui::SmallButton("Refresh Insights"))
-        {
-            RefreshInsights();
-            insightRefreshTimer_ = insightRefreshInterval_;
-        }
-        ImGui::SameLine();
-        if (insightsLoading_)
-        {
-            float time = (float)ImGui::GetTime();
-            const char* spinner = "|/-\\";
-            ImGui::Text("Loading %c", spinner[(int)(time * 4.f) % 4]);
-        }
-        else
-        {
-            ImGui::TextDisabled("(%zu insights)", cachedRecommendations_.size());
-        }
-        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 100.f);
-        ImGui::TextDisabled("%.0fs", insightRefreshTimer_);
-
-        if (!newsService_->HasApiKey())
-        {
+            if (ImGui::MenuItem("Options..."))
+                showOptions_ = true;
             ImGui::Separator();
-            ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.2f, 1.f),
-                "Set GNEWS_API_KEY env var for live news data");
+            if (ImGui::MenuItem("Exit")) {}
+            ImGui::EndMenu();
         }
 
-        ImGui::Separator();
-
-        if (cachedRecommendations_.empty())
+        if (ImGui::BeginMenu("View"))
         {
-            ImGui::TextDisabled("No recommendations yet. Add active strategies and refresh.");
-        }
-        else
-        {
-            for (auto& rec : cachedRecommendations_)
+            ImGui::MenuItem("Dashboard",        nullptr, &showDashboard_);
+            ImGui::MenuItem("Stock Charts",     nullptr, &showStockCharts_);
+            ImGui::MenuItem("Strategy Wizard",  nullptr, &showStrategyWizard_);
+            ImGui::MenuItem("Strategies",       nullptr, &showStrategies_);
+            ImGui::MenuItem("Portfolio",        nullptr, &showPortfolio_);
+            ImGui::MenuItem("Market Signals",   nullptr, &showMarketSignals_);
+            ImGui::Separator();
+            ImGui::MenuItem("Recommendations",  nullptr, &showRecommendations_);
+            ImGui::MenuItem("Market Warnings",  nullptr, &showMarketWarnings_);
+            ImGui::MenuItem("AI Operations",    nullptr, &showAIOperations_);
+            ImGui::MenuItem("Graph Events",     nullptr, &showGraphEvents_);
+            ImGui::MenuItem("Server Launcher",  nullptr, &showServerLauncher_);
+            ImGui::Separator();
+            if (ImGui::MenuItem("New Chart Window"))
             {
-                ImGui::PushID(&rec);
-
-                // Symbol badge
-                ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.f, 1.f), "[%s]", rec.symbol.c_str());
-                ImGui::SameLine();
-                ImGui::TextColored(ImVec4(0.3f, 0.8f, 0.5f, 1.f), "%s", rec.title.c_str());
-
-                if (!rec.body.empty())
-                {
-                    ImGui::Indent(20.f);
-                    ImGui::TextWrapped("%s", rec.body.c_str());
-                    ImGui::Unindent(20.f);
-                }
-
-                ImGui::Separator();
-                ImGui::PopID();
+                auto dc = DetachedChart::Create("", StockQuote{});
+                WireDetachedChart(dc);
+                detachedCharts_.push_back(std::move(dc));
             }
-        }
-
-        ImGui::End();
-    }
-
-    // ── Market Warnings ─────────────────────────────────────────────────────────
-
-    void UI::ShowMarketWarnings()
-    {
-        // Color the title bar if there are alerts
-        bool hasAlerts = std::any_of(cachedWarnings_.begin(), cachedWarnings_.end(),
-            [](const MarketInsight& w) { return w.severity == InsightSeverity::Alert; });
-
-        if (hasAlerts)
-        {
-            ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.5f, 0.1f, 0.1f, 1.f));
-            ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.3f, 0.08f, 0.08f, 1.f));
-        }
-
-        ImGui::Begin("Market Warnings", &showMarketWarnings_);
-
-        if (hasAlerts)
-            ImGui::PopStyleColor(2);
-
-        ImGui::TextDisabled("(%zu warnings)", cachedWarnings_.size());
-        ImGui::Separator();
-
-        if (cachedWarnings_.empty())
-        {
-            ImGui::TextColored(ImVec4(0.3f, 0.8f, 0.5f, 1.f), "No warnings - all clear");
-        }
-        else
-        {
-            for (auto& warn : cachedWarnings_)
+            if (ImGui::BeginMenu("New Indicator Window"))
             {
-                ImGui::PushID(&warn);
-
-                // Severity icon + color
-                ImVec4 sevColor;
-                const char* sevIcon;
-                switch (warn.severity)
+                const char* indicators[] = { "Candles", "Volume", "RSI", "MACD" };
+                for (auto& ind : indicators)
                 {
-                case InsightSeverity::Alert:
-                    sevColor = ImVec4(0.9f, 0.2f, 0.2f, 1.f);
-                    sevIcon  = "[!]";
-                    break;
-                case InsightSeverity::Warning:
-                    sevColor = ImVec4(0.9f, 0.7f, 0.2f, 1.f);
-                    sevIcon  = "[*]";
-                    break;
-                default:
-                    sevColor = ImVec4(0.6f, 0.6f, 0.7f, 1.f);
-                    sevIcon  = "[i]";
-                    break;
+                    if (ImGui::MenuItem(ind))
+                    {
+                        auto dc = DetachedChart::Create("", StockQuote{}, ind);
+                        WireDetachedChart(dc);
+                        detachedCharts_.push_back(std::move(dc));
+                    }
                 }
-
-                ImGui::TextColored(sevColor, "%s", sevIcon);
-                ImGui::SameLine();
-                ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.f, 1.f), "[%s]", warn.symbol.c_str());
-                ImGui::SameLine();
-                ImGui::TextColored(sevColor, "%s", warn.title.c_str());
-
-                if (!warn.body.empty())
-                {
-                    ImGui::Indent(20.f);
-                    ImGui::TextWrapped("%s", warn.body.c_str());
-                    ImGui::Unindent(20.f);
-                }
-
-                ImGui::Separator();
-                ImGui::PopID();
+                ImGui::EndMenu();
             }
-        }
-
-        ImGui::End();
-    }
-
-    // ── AI Operations ────────────────────────────────────────────────────────────
-
-    void UI::ShowAIOperations()
-    {
-        ImGui::Begin("AI Operations", &showAIOperations_);
-
-        // Auto-trade toggle (persisted)
-        if (ImGui::Checkbox("Auto-Trade", &aiAutoTrade_))
-        {
-            if (engine_->globals_)
-                engine_->globals_->Set(gk::prefix::STATE, gk::key::AI_AUTO_TRADE, aiAutoTrade_ ? "1" : "0");
-        }
-        ImGui::SameLine();
-        if (aiAutoTrade_)
-            ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.f), "LIVE - AI will execute trades!");
-        else
-            ImGui::TextDisabled("Disabled - AI suggestions only");
-
-        ImGui::Separator();
-
-        if (cachedOperations_.empty())
-        {
-            ImGui::TextDisabled("No AI operations pending.");
-            ImGui::TextDisabled("Add AI-type strategies and wait for analysis cycle.");
-        }
-        else
-        {
-            // Group by urgency
-            for (int sev = (int)InsightSeverity::Alert; sev >= (int)InsightSeverity::Info; --sev)
+            ImGui::Separator();
+            ImGui::MenuItem("Threads Debugger", nullptr, &showThreadsDebugger_);
+            ImGui::MenuItem("Style Editor",     nullptr, &showStyleEditor_);
+            ImGui::Separator();
+            if (ImGui::MenuItem("Reset Layout"))
             {
-                auto severity = (InsightSeverity)sev;
-                bool hasAny = false;
-                for (auto& op : cachedOperations_)
-                    if (op.urgency == severity) { hasAny = true; break; }
-                if (!hasAny) continue;
-
-                // Section header with color
-                ImVec4 headerCol;
-                const char* headerLabel;
-                switch (severity)
-                {
-                case InsightSeverity::Alert:
-                    headerCol = ImVec4(0.9f, 0.15f, 0.15f, 1.f);
-                    headerLabel = "EMERGENCY";
-                    break;
-                case InsightSeverity::Warning:
-                    headerCol = ImVec4(0.9f, 0.7f, 0.15f, 1.f);
-                    headerLabel = "SHOULD ACT";
-                    break;
-                default:
-                    headerCol = ImVec4(0.3f, 0.8f, 0.4f, 1.f);
-                    headerLabel = "RECOMMENDATIONS";
-                    break;
-                }
-
-                ImGui::TextColored(headerCol, "--- %s ---", headerLabel);
-                ImGui::Spacing();
-
-                for (auto& op : cachedOperations_)
-                {
-                    if (op.urgency != severity) continue;
-
-                    ImGui::PushID(&op);
-
-                    // Operation type badge
-                    ImVec4 typeCol = (op.type == OperationType::Sell)
-                        ? ImVec4(0.9f, 0.3f, 0.3f, 1.f)
-                        : (op.type == OperationType::Buy)
-                            ? ImVec4(0.3f, 0.8f, 0.4f, 1.f)
-                            : ImVec4(0.7f, 0.7f, 0.8f, 1.f);
-
-                    ImGui::TextColored(typeCol, "[%s]", OperationTypeToString(op.type));
-                    ImGui::SameLine();
-                    ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.f, 1.f), "%s", op.symbol.c_str());
-                    ImGui::SameLine();
-
-                    if (op.suggestedPrice > 0.f)
-                        ImGui::Text("@ %.2f", op.suggestedPrice);
-
-                    if (op.strategyId > 0)
-                    {
-                        ImGui::SameLine();
-                        ImGui::TextDisabled("(#%lld)", (long long)op.strategyId);
-                    }
-
-                    // Confidence bar
-                    if (op.confidence > 0.f)
-                    {
-                        ImGui::SameLine();
-                        ImGui::TextDisabled("%.0f%%", op.confidence * 100.f);
-                    }
-
-                    // Reason
-                    if (!op.reason.empty())
-                    {
-                        ImGui::Indent(20.f);
-                        ImGui::TextWrapped("%s", op.reason.c_str());
-                        ImGui::Unindent(20.f);
-                    }
-
-                    // Status / action button
-                    if (op.executed)
-                    {
-                        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 60.f);
-                        ImGui::TextColored(ImVec4(0.3f, 0.8f, 0.4f, 1.f), "DONE");
-                    }
-                    else if (!aiAutoTrade_)
-                    {
-                        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 80.f);
-                        if (ImGui::SmallButton("Execute"))
-                        {
-                            // Manual execution of single operation
-                            op.executed = true;
-                            // TODO: Wire to broker action
-                        }
-                    }
-
-                    ImGui::Separator();
-                    ImGui::PopID();
-                }
-
-                ImGui::Spacing();
+                dockLayoutBuilt_ = false;
+                showDashboard_ = showStockCharts_ = showStrategyWizard_ = true;
+                showStrategies_ = showPortfolio_ = showMarketSignals_ = true;
+                showRecommendations_ = showMarketWarnings_ = showAIOperations_ = true;
+                showGraphEvents_ = true;
+                showServerLauncher_ = false;
             }
+            ImGui::EndMenu();
         }
 
-        ImGui::End();
+        if (ImGui::BeginMenu("Markets"))
+        {
+            if (ImGui::BeginMenu("US Stocks"))
+            {
+                for (auto& sym : kPresetUS)
+                    if (ImGui::MenuItem(sym)) FetchSymbol(sym);
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Mexican Stocks (BMV)"))
+            {
+                for (auto& sym : kPresetMEX)
+                    if (ImGui::MenuItem(sym)) FetchSymbol(sym);
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Crypto"))
+            {
+                for (auto& sym : kPresetCrypto)
+                    if (ImGui::MenuItem(sym)) FetchSymbol(sym);
+                ImGui::EndMenu();
+            }
+            ImGui::EndMenu();
+        }
+
+        float fps = ImGui::GetIO().Framerate;
+        char fpsText[32];
+        snprintf(fpsText, sizeof(fpsText), "%.0f FPS", fps);
+        float textWidth = ImGui::CalcTextSize(fpsText).x;
+        ImGui::SameLine(ImGui::GetWindowWidth() - textWidth - 20.f);
+        ImGui::TextColored(
+            fps > 30.f ? ImVec4(0.4f, 0.8f, 0.4f, 1.f) : ImVec4(0.9f, 0.3f, 0.3f, 1.f),
+            "%s", fpsText);
+
+        ImGui::EndMenuBar();
     }
 
     // ── Strategy Wizard (Dockable) ─────────────────────────────────────────────
 
     void UI::ShowStrategyWizard()
     {
-        // Get candle data from the chart matching the wizard's symbol (or first available)
         const std::vector<Candle>* candles = nullptr;
         int focusedCandle = -1;
         int totalCandles = 0;
@@ -2064,7 +1060,6 @@ namespace stnks
                 break;
             }
         }
-        // Fallback to any chart if symbol not found
         if (!candles)
         {
             for (auto& panel : charts_)
@@ -2081,12 +1076,18 @@ namespace stnks
 
         wizard_.DrawDockable(&showStrategyWizard_, candles, focusedCandle, totalCandles);
 
-        // Handle wizard results at UI level
         if (wizard_.WasConfirmed())
         {
             Strategy result = wizard_.GetStrategy();
 
-            // Find matching StrategyLayer and apply
+            if (result.id == 0)
+            {
+                if (defaultBroker_ == BrokerSource::Auto)
+                    result.broker = BrokerSourceFromName(lastSelectedSource_);
+                else
+                    result.broker = defaultBroker_;
+            }
+
             bool handled = false;
             for (auto& panel : charts_)
             {
@@ -2095,7 +1096,6 @@ namespace stnks
 
                 if (sl->GetEditingId() > 0 && sl->GetEditingId() == result.id)
                 {
-                    // Edit mode: update existing
                     if (sl->onStrategyChanged)
                         sl->onStrategyChanged(result, false);
                     sl->StopEditing();
@@ -2104,7 +1104,6 @@ namespace stnks
                 }
                 else if (result.symbol == panel.symbol && result.id == 0)
                 {
-                    // Create mode: insert new via layer callback
                     if (sl->onStrategyChanged)
                         sl->onStrategyChanged(result, true);
                     handled = true;
@@ -2112,13 +1111,18 @@ namespace stnks
                 }
             }
 
-            // Fallback: save directly if no chart panel matched
             if (!handled && service_)
             {
                 if (result.id > 0)
-                    service_->UpdateStrategy(result);
+                {
+                    if (!service_->UpdateStrategy(result))
+                        PushToast("Failed to update strategy #" + std::to_string(result.id), ui::kToastError);
+                }
                 else
-                    service_->InsertStrategy(result);
+                {
+                    if (service_->InsertStrategy(result) <= 0)
+                        PushToast("Failed to create strategy for " + result.symbol, ui::kToastError);
+                }
                 strategiesDirty_ = true;
             }
 
@@ -2126,7 +1130,6 @@ namespace stnks
         }
         else if (wizard_.WasCancelled())
         {
-            // Notify any editing layer
             for (auto& panel : charts_)
             {
                 auto* sl = panel.chart.GetStrategyLayer();
@@ -2174,163 +1177,16 @@ namespace stnks
                 bool open = true;
                 if (ImGui::BeginTabItem(it->symbol.c_str(), &open))
                 {
-                    // Timeframe selector row
-                    ImGui::PushID(it->symbol.c_str());
-                    for (int tf = 0; tf < (int)(sizeof(kTimeframes) / sizeof(kTimeframes[0])); ++tf)
-                    {
-                        if (tf > 0) ImGui::SameLine(0.f, 2.f);
-                        bool selected = (it->timeframeIdx == tf);
-                        if (selected)
-                            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.28f, 0.45f, 1.f));
-                        if (ImGui::SmallButton(kTimeframes[tf].label))
-                        {
-                            if (it->timeframeIdx != tf)
-                            {
-                                it->timeframeIdx = tf;
-                                it->loading = true;
-                                it->quote = StockQuote{};
-                                it->chart = StockChart{};
-                                marketService_->FetchQuoteAsync(
-                                    it->symbol,
-                                    kTimeframes[tf].interval,
-                                    kTimeframes[tf].range);
-                                spdlog::info("[UI] Switching {} to {}", it->symbol, kTimeframes[tf].label);
-                            }
-                        }
-                        if (selected)
-                            ImGui::PopStyleColor();
-                    }
-                    // Latency / data freshness indicator
-                    if (!it->quote.candles.empty() && it->quote.fetchedAt > 0)
-                    {
-                        int64_t now = (int64_t)std::time(nullptr);
-                        int64_t age = now - it->quote.fetchedAt;
-                        int64_t lastCandle = it->quote.candles.back().timestamp;
-                        int64_t candleAge = now - lastCandle;
-
-                        // Color: green < 60s, yellow < 5min, orange < 15min, red > 15min
-                        ImVec4 color;
-                        if (age < 60)        color = ImVec4(0.3f, 0.9f, 0.3f, 1.f);
-                        else if (age < 300)  color = ImVec4(0.9f, 0.9f, 0.3f, 1.f);
-                        else if (age < 900)  color = ImVec4(0.9f, 0.6f, 0.2f, 1.f);
-                        else                 color = ImVec4(0.9f, 0.3f, 0.3f, 1.f);
-
-                        auto fmtAge = [](int64_t secs) -> std::string {
-                            if (secs < 60)   return std::to_string(secs) + "s";
-                            if (secs < 3600) return std::to_string(secs / 60) + "m";
-                            return std::to_string(secs / 3600) + "h";
-                        };
-
-                        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 200.f);
-                        ImGui::TextColored(color, "Data: %s ago", fmtAge(age).c_str());
-                        ImGui::SameLine();
-                        ImGui::TextDisabled("| Last candle: %s ago", fmtAge(candleAge).c_str());
-
-                        auto* source = marketService_->GetActiveSource();
-                        if (source && !source->IsRealtime())
-                        {
-                            ImGui::SameLine();
-                            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.f),
-                                "(%s ~%dm delay)", source->GetName(), source->GetDelaySeconds() / 60);
-                        }
-
-                        // Market state badge
-                        MarketState mktState = MarketHours::GetState(it->symbol);
-                        MarketType mktType = MarketHours::ClassifySymbol(it->symbol);
-                        ImVec4 mktColor;
-                        switch (mktState)
-                        {
-                        case MarketState::Open:       mktColor = ImVec4(0.2f, 0.9f, 0.3f, 1.f); break;
-                        case MarketState::PreMarket:  mktColor = ImVec4(0.9f, 0.8f, 0.2f, 1.f); break;
-                        case MarketState::AfterHours: mktColor = ImVec4(0.8f, 0.6f, 0.2f, 1.f); break;
-                        case MarketState::Closed:     mktColor = ImVec4(0.6f, 0.3f, 0.3f, 1.f); break;
-                        }
-                        ImGui::SameLine();
-                        ImGui::TextColored(mktColor, "[%s %s]",
-                            MarketHours::MarketTypeToString(mktType),
-                            MarketHours::StateToString(mktState));
-                    }
-                    ImGui::PopID();
-
-                    if (it->loading)
-                    {
-                        ImGui::TextDisabled("Loading %s...", it->symbol.c_str());
-                        float time = (float)ImGui::GetTime();
-                        const char* spinner = "|/-\\";
-                        ImGui::SameLine();
-                        ImGui::Text("%c", spinner[(int)(time * 4.f) % 4]);
-                    }
-                    else if (it->quote.candles.empty())
-                    {
-                        ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.f),
-                                           "Failed to load data for %s", it->symbol.c_str());
-                    }
-                    else
-                    {
-                        it->chart.Draw(("##chart_" + it->symbol).c_str());
-
-                        // Chart bounds for wizard interaction
-                        ImVec2 chartMin = ImGui::GetItemRectMin();
-                        ImVec2 chartMax = ImGui::GetItemRectMax();
-                        auto* stratLayer = it->chart.GetStrategyLayer();
-                        if (stratLayer)
-                        {
-                            const std::vector<Candle>* candles = it->quote.candles.empty()
-                                ? nullptr : &it->quote.candles;
-
-                            // PreUpdate on the UI-level dockable wizard for historical click detection
-                            wizard_.PreUpdate(chartMin, chartMax,
-                                it->chart.GetFocusedCandle(),
-                                it->chart.GetCandleCount(),
-                                candles);
-
-                            // Also PreUpdate the layer wizard (for overlay mode redundancy)
-                            auto& layerWiz = stratLayer->GetWizard();
-                            layerWiz.PreUpdate(chartMin, chartMax,
-                                it->chart.GetFocusedCandle(),
-                                it->chart.GetCandleCount(),
-                                candles);
-
-                            // "+ Strategy" overlay button on chart (opens dockable wizard)
-                            if (!wizard_.IsOpen() && !layerWiz.IsOpen())
-                            {
-                                ImVec2 btnPos(chartMin.x + 8.f, chartMin.y + 8.f);
-                                ImGui::SetNextWindowPos(btnPos, ImGuiCond_Always);
-                                ImGui::SetNextWindowSize(ImVec2(0, 0));
-                                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
-                                ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.f);
-                                ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.12f, 0.9f));
-
-                                std::string btnWinId = "##StratBtn_" + it->symbol;
-                                ImGui::Begin(btnWinId.c_str(), nullptr,
-                                    ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                                    ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
-                                    ImGuiWindowFlags_NoBringToFrontOnFocus);
-
-                                if (ImGui::SmallButton("+ Strategy"))
-                                {
-                                    float price = it->quote.candles.empty() ? 0.f : it->quote.candles.back().close;
-                                    wizard_.OpenCreate(it->symbol, StrategyType::TPSL, StrategyDirection::Long, price);
-                                    showStrategyWizard_ = true; // Ensure panel is visible
-                                }
-
-                                ImGui::End();
-                                ImGui::PopStyleColor();
-                                ImGui::PopStyleVar(2);
-                            }
-
-                            // Draw layer wizard overlay (redundancy — for right-click context menu created strats)
-                            stratLayer->DrawWizard(chartMin, chartMax,
-                                it->chart.GetFocusedCandle(),
-                                it->chart.GetCandleCount(),
-                                candles);
-                        }
-                    }
+                    DrawChartTab(*it);
                     ImGui::EndTabItem();
                 }
 
                 if (!open)
+                {
+                    if (kTimeframes[it->timeframeIdx].realtime)
+                        marketService_->StopRealtimePolling(it->symbol);
                     it = charts_.erase(it);
+                }
                 else
                     ++it;
             }
@@ -2340,13 +1196,283 @@ namespace stnks
         ImGui::End();
     }
 
+    void UI::DrawChartTab(ChartPanelData& panel)
+    {
+        ImGui::PushID(panel.symbol.c_str());
+
+        // Timeframe selector
+        for (int tf = 0; tf < kTimeframeCount; ++tf)
+        {
+            if (tf > 0) ImGui::SameLine(0.f, 2.f);
+            bool selected = (panel.timeframeIdx == tf);
+            if (selected)
+            {
+                ImVec4 btnCol = kTimeframes[tf].realtime ? ui::kTimeframeBtnRT : ui::kTimeframeBtnNorm;
+                ImGui::PushStyleColor(ImGuiCol_Button, btnCol);
+            }
+            if (ImGui::SmallButton(kTimeframes[tf].label))
+            {
+                if (panel.timeframeIdx != tf)
+                {
+                    if (kTimeframes[panel.timeframeIdx].realtime)
+                        marketService_->StopRealtimePolling(panel.symbol);
+
+                    panel.timeframeIdx = tf;
+                    panel.loading = true;
+                    panel.quote = StockQuote{};
+                    panel.chart = StockChart{};
+                    const char* interval = kTimeframes[tf].realtime ? "1m" : kTimeframes[tf].interval;
+                    marketService_->FetchQuoteAsync(panel.symbol, interval, kTimeframes[tf].range);
+
+                    if (kTimeframes[tf].realtime)
+                        marketService_->StartRealtimePolling(panel.symbol);
+
+                    panel.refreshTimer = 0.f;
+                    spdlog::info("[UI] Switching {} to {}", panel.symbol, kTimeframes[tf].label);
+                }
+            }
+            if (selected)
+                ImGui::PopStyleColor();
+        }
+
+        DrawChartFreshnessIndicator(panel);
+        ImGui::PopID();
+
+        if (panel.loading)
+        {
+            ImGui::TextDisabled("Loading %s...", panel.symbol.c_str());
+            float time = (float)ImGui::GetTime();
+            const char* spinner = "|/-\\";
+            ImGui::SameLine();
+            ImGui::Text("%c", spinner[(int)(time * 4.f) % 4]);
+        }
+        else if (panel.quote.candles.empty())
+        {
+            ImGui::TextColored(ui::kColorBearish,
+                               "Failed to load data for %s", panel.symbol.c_str());
+        }
+        else
+        {
+            panel.chart.Draw(("##chart_" + panel.symbol).c_str());
+            DrawChartOverlay(panel);
+        }
+    }
+
+    void UI::DrawChartFreshnessIndicator(const ChartPanelData& panel)
+    {
+        if (panel.quote.candles.empty() || panel.quote.fetchedAt <= 0) return;
+
+        int64_t now = (int64_t)std::time(nullptr);
+        int64_t age = now - panel.quote.fetchedAt;
+        int64_t candleAge = now - panel.quote.candles.back().timestamp;
+
+        ImVec4 color = ui::FreshnessColor((float)age);
+
+        auto fmtAge = [](int64_t secs) -> std::string {
+            if (secs < 60)   return std::to_string(secs) + "s";
+            if (secs < 3600) return std::to_string(secs / 60) + "m";
+            return std::to_string(secs / 3600) + "h";
+        };
+
+        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 200.f);
+        ImGui::TextColored(color, "Data: %s ago", fmtAge(age).c_str());
+        ImGui::SameLine();
+        ImGui::TextDisabled("| Last candle: %s ago", fmtAge(candleAge).c_str());
+
+        auto* source = marketService_->GetActiveSource();
+        if (kTimeframes[panel.timeframeIdx].realtime)
+        {
+            ImGui::SameLine();
+            auto* broker = marketService_->GetActiveBrokerSource();
+            if (broker)
+                ImGui::TextColored(ui::kColorConnected, "(RT: %s)", broker->GetName());
+            else
+                ImGui::TextColored(ui::kColorWarning, "(RT: no broker — using %s)",
+                    source ? source->GetName() : "none");
+        }
+        else if (source && !source->IsRealtime())
+        {
+            ImGui::SameLine();
+            ImGui::TextColored(ui::kColorDisabled,
+                "(%s ~%dm delay)", source->GetName(), source->GetDelaySeconds() / 60);
+        }
+
+        MarketState mktState = MarketHours::GetState(panel.symbol);
+        MarketType mktType = MarketHours::ClassifySymbol(panel.symbol);
+        ImGui::SameLine();
+        ImGui::TextColored(ui::MarketStateColor(mktState), "[%s %s]",
+            MarketHours::MarketTypeToString(mktType),
+            MarketHours::StateToString(mktState));
+    }
+
+    void UI::DrawChartOverlay(ChartPanelData& panel)
+    {
+        ImVec2 chartMin = ImGui::GetItemRectMin();
+        ImVec2 chartMax = ImGui::GetItemRectMax();
+        auto* stratLayer = panel.chart.GetStrategyLayer();
+        if (!stratLayer) return;
+
+        const std::vector<Candle>* candles = panel.quote.candles.empty()
+            ? nullptr : &panel.quote.candles;
+
+        wizard_.PreUpdate(chartMin, chartMax,
+            panel.chart.GetFocusedCandle(),
+            panel.chart.GetCandleCount(),
+            candles);
+
+        auto& layerWiz = stratLayer->GetWizard();
+        layerWiz.PreUpdate(chartMin, chartMax,
+            panel.chart.GetFocusedCandle(),
+            panel.chart.GetCandleCount(),
+            candles);
+
+        // "+ Strategy" button overlay
+        if (!wizard_.IsOpen() && !layerWiz.IsOpen())
+        {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const char* btnLabel = "+ Strategy";
+            ImVec2 textSz = ImGui::CalcTextSize(btnLabel);
+            float pad = 6.f;
+            ImVec2 btnMin(chartMin.x + 8.f, chartMin.y + 8.f);
+            ImVec2 btnMax(btnMin.x + textSz.x + pad * 2.f, btnMin.y + textSz.y + pad * 2.f);
+
+            bool hovered = ImGui::IsMouseHoveringRect(btnMin, btnMax);
+            ImU32 bgCol  = hovered ? IM_COL32(30, 50, 90, 230)  : IM_COL32(15, 20, 35, 200);
+            ImU32 border = hovered ? IM_COL32(80, 130, 220, 255) : IM_COL32(50, 65, 100, 180);
+            ImU32 textCol = hovered ? IM_COL32(255, 255, 255, 255) : IM_COL32(180, 190, 210, 220);
+
+            dl->AddRectFilled(btnMin, btnMax, bgCol, 5.f);
+            dl->AddRect(btnMin, btnMax, border, 5.f, 0, 1.2f);
+            dl->AddText(ImVec2(btnMin.x + pad, btnMin.y + pad), textCol, btnLabel);
+
+            if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            {
+                float price = panel.quote.candles.empty() ? 0.f : panel.quote.candles.back().close;
+                wizard_.OpenCreate(panel.symbol, StrategyType::TPSL, StrategyDirection::Long, price);
+                showStrategyWizard_ = true;
+            }
+        }
+
+        stratLayer->DrawWizard(chartMin, chartMax,
+            panel.chart.GetFocusedCandle(),
+            panel.chart.GetCandleCount(),
+            candles);
+    }
+
+    // ── Detached Charts ────────────────────────────────────────────────────────
+
+    void UI::RenderDetachedCharts()
+    {
+        for (auto it = detachedCharts_.begin(); it != detachedCharts_.end();)
+        {
+            if (!it->Draw())
+                it = detachedCharts_.erase(it);
+            else
+                ++it;
+        }
+    }
+
+    void UI::WireDetachedChart(DetachedChart& dc)
+    {
+        dc.onSymbolChanged = [this](int dcId, const std::string& newSymbol) {
+            marketService_->FetchQuoteAsync(newSymbol, "1d", "6mo");
+            spdlog::info("[UI] Detached chart #{} changing to {}", dcId, newSymbol);
+        };
+
+        dc.onWireStrategyLayer = [this](StrategyLayer& sl, const std::string& sym) {
+            WireStrategyLayerCallbacks(sl, sym);
+        };
+
+        dc.onWireTearOut = [this](StockChart& chart, const std::string& sym) {
+            chart.onIndicatorTearOut = [this, sym](const std::string& indicatorName) {
+                StockQuote q;
+                for (auto& p : charts_)
+                    if (p.symbol == sym) { q = p.quote; break; }
+                if (q.candles.empty())
+                    for (auto& d : detachedCharts_)
+                        if (d.symbol == sym) { q = d.quote; break; }
+                auto newDc = DetachedChart::Create(sym, q, indicatorName);
+                WireDetachedChart(newDc);
+                detachedCharts_.push_back(std::move(newDc));
+            };
+            chart.onDuplicateChart = [this, sym]() {
+                StockQuote q;
+                for (auto& p : charts_)
+                    if (p.symbol == sym) { q = p.quote; break; }
+                if (q.candles.empty())
+                    for (auto& d : detachedCharts_)
+                        if (d.symbol == sym) { q = d.quote; break; }
+                auto newDc = DetachedChart::Create(sym, q);
+                WireDetachedChart(newDc);
+                detachedCharts_.push_back(std::move(newDc));
+            };
+        };
+    }
+
+    // ── Symbol Selector ────────────────────────────────────────────────────────
+
     void UI::ShowSymbolSelector()
     {
-        ImGui::TextDisabled("Search & Add Symbol");
+        // Default broker / data source combo
+        {
+            ImGui::TextDisabled("Source:");
+            ImGui::SameLine();
+
+            ImVec4 col = ui::BrokerColor(defaultBroker_);
+            ImGui::PushStyleColor(ImGuiCol_Text, col);
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(col.x * 0.15f, col.y * 0.15f, col.z * 0.15f, 0.8f));
+            ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(col.x * 0.25f, col.y * 0.25f, col.z * 0.25f, 0.9f));
+            ImGui::SetNextItemWidth(100.f);
+            if (ImGui::BeginCombo("##defaultBroker", BrokerSourceToString(defaultBroker_)))
+            {
+                for (int i = 0; i < kBrokerSourceCount; ++i)
+                {
+                    auto src = static_cast<BrokerSource>(i);
+                    ImVec4 c = ui::BrokerColor(src);
+                    bool selected = (defaultBroker_ == src);
+                    ImGui::PushStyleColor(ImGuiCol_Text, c);
+                    if (ImGui::Selectable(BrokerSourceToString(src), selected))
+                    {
+                        defaultBroker_ = src;
+                        switch (src)
+                        {
+                        case BrokerSource::Binance:    marketService_->SetActiveSource("Binance"); break;
+                        case BrokerSource::GBM:        marketService_->SetActiveSource("GBM+"); break;
+                        case BrokerSource::MetaTrader:  marketService_->SetActiveSource("MT5"); break;
+                        default:                        marketService_->SetActiveSource("Yahoo Finance"); break;
+                        }
+                    }
+                    ImGui::PopStyleColor();
+                    if (selected) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::PopStyleColor(3);
+
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::BeginTooltip();
+                ImGui::Text("Broker & data source for new strategies");
+                if (defaultBroker_ == BrokerSource::Auto)
+                    ImGui::TextDisabled("Auto: broker is set from the search result you pick");
+                else
+                    ImGui::TextDisabled("Fixed: all new strategies use this broker");
+                auto* active = marketService_->GetActiveSource();
+                if (active)
+                    ImGui::Text("Active source: %s%s", active->GetName(),
+                        active->IsRealtime() ? " (real-time)" : " (~15min delay)");
+                if (!lastSelectedSource_.empty())
+                    ImGui::Text("Last selected: %s", lastSelectedSource_.c_str());
+                ImGui::EndTooltip();
+            }
+        }
+
+        ImGui::SameLine(0.f, 12.f);
+        ImGui::TextDisabled("Search:");
+        ImGui::SameLine();
 
         ImGui::SetNextItemWidth(280.f);
-        bool changed = ImGui::InputText("##symbolSearch", searchInput_, sizeof(searchInput_),
-                                         ImGuiInputTextFlags_None);
+        bool changed = ImGui::InputText("##symbolSearch", searchInput_, sizeof(searchInput_));
 
         std::string currentQuery(searchInput_);
         if (changed && currentQuery.length() >= 2)
@@ -2366,44 +1492,7 @@ namespace stnks
             }
         }
 
-        bool hasResults = !searchResults_.empty() && currentQuery.length() >= 2;
-
-        if (hasResults || searchPending_)
-        {
-            ImGui::SetNextWindowPos(ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y));
-            ImGui::SetNextWindowSize(ImVec2(460.f, 0.f));
-
-            ImGuiWindowFlags popupFlags =
-                ImGuiWindowFlags_NoTitleBar |
-                ImGuiWindowFlags_NoResize |
-                ImGuiWindowFlags_NoMove |
-                ImGuiWindowFlags_NoFocusOnAppearing |
-                ImGuiWindowFlags_AlwaysAutoResize;
-
-            ImGui::Begin("##SymbolDropdown", nullptr, popupFlags);
-
-            if (searchPending_ && searchResults_.empty())
-                ImGui::TextDisabled("Searching...");
-
-            for (auto& match : searchResults_)
-            {
-                char label[256];
-                snprintf(label, sizeof(label), "%-12s  %-30s  %-10s  %s",
-                         match.symbol.c_str(),
-                         match.name.c_str(),
-                         match.exchange.c_str(),
-                         match.type.c_str());
-
-                if (ImGui::Selectable(label))
-                {
-                    FetchSymbol(match.symbol);
-                    searchResults_.clear();
-                    searchInput_[0] = '\0';
-                }
-            }
-
-            ImGui::End();
-        }
+        DrawSearchDropdown(currentQuery);
 
         if (currentQuery.length() < 2)
             searchResults_.clear();
@@ -2412,13 +1501,82 @@ namespace stnks
         ImGui::TextDisabled("Scroll: navigate | Shift+Scroll: zoom | Middle-drag: pan");
     }
 
+    void UI::DrawSearchDropdown(const std::string& currentQuery)
+    {
+        bool hasResults = !searchResults_.empty() && currentQuery.length() >= 2;
+        if (!hasResults && !searchPending_) return;
+
+        ImGui::SetNextWindowPos(ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y));
+        ImGui::SetNextWindowSize(ImVec2(460.f, 0.f));
+
+        ImGuiWindowFlags popupFlags =
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoFocusOnAppearing |
+            ImGuiWindowFlags_AlwaysAutoResize;
+
+        ImGui::Begin("##SymbolDropdown", nullptr, popupFlags);
+
+        if (searchPending_ && searchResults_.empty())
+            ImGui::TextDisabled("Searching...");
+
+        for (auto& match : searchResults_)
+        {
+            ImGui::PushID(match.symbol.c_str());
+
+            ImVec4 badgeCol = ui::SourceNameColor(match.source);
+
+            auto SourceTag = [](const std::string& src) -> const char* {
+                if (src == "Binance")        return "BIN";
+                if (src == "GBM+")           return "GBM";
+                if (src == "MT5")            return "MT5";
+                if (src == "Yahoo Finance")  return "YHO";
+                return "???";
+            };
+
+            ImVec2 cursor = ImGui::GetCursorScreenPos();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const char* tag = SourceTag(match.source);
+            ImVec2 tagSize = ImGui::CalcTextSize(tag);
+            float padX = 4.f, padY = 1.f;
+            ImVec2 badgeMin(cursor.x, cursor.y + 1.f);
+            ImVec2 badgeMax(badgeMin.x + tagSize.x + padX * 2.f, badgeMin.y + tagSize.y + padY * 2.f);
+            dl->AddRectFilled(badgeMin, badgeMax,
+                IM_COL32((int)(badgeCol.x*255*0.3f), (int)(badgeCol.y*255*0.3f), (int)(badgeCol.z*255*0.3f), 200), 3.f);
+            dl->AddRect(badgeMin, badgeMax,
+                IM_COL32((int)(badgeCol.x*255), (int)(badgeCol.y*255), (int)(badgeCol.z*255), 140), 3.f);
+            dl->AddText(ImVec2(badgeMin.x + padX, badgeMin.y + padY),
+                IM_COL32((int)(badgeCol.x*255), (int)(badgeCol.y*255), (int)(badgeCol.z*255), 255), tag);
+
+            float badgeWidth = tagSize.x + padX * 2.f + 6.f;
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + badgeWidth);
+
+            char label[256];
+            snprintf(label, sizeof(label), "%-12s  %-28s  %-10s  %s",
+                     match.symbol.c_str(), match.name.c_str(),
+                     match.exchange.c_str(), match.type.c_str());
+
+            if (ImGui::Selectable(label))
+            {
+                lastSelectedSource_ = match.source;
+                FetchSymbol(match.symbol);
+                searchResults_.clear();
+                searchInput_[0] = '\0';
+            }
+
+            ImGui::PopID();
+        }
+
+        ImGui::End();
+    }
+
+    // ── FetchSymbol ────────────────────────────────────────────────────────────
+
     void UI::FetchSymbol(const std::string& symbol,
                          const char* interval,
                          const char* range)
     {
         telemetry_.marketFetches++;
 
-        // If chart already exists for this symbol, don't duplicate — just refetch
         for (auto& panel : charts_)
         {
             if (panel.symbol == symbol)
@@ -2432,7 +1590,7 @@ namespace stnks
             }
         }
 
-        ChartPanel panel;
+        ChartPanelData panel;
         panel.symbol  = symbol;
         panel.loading = true;
         charts_.push_back(std::move(panel));
@@ -2441,131 +1599,318 @@ namespace stnks
         spdlog::info("[UI] Fetching {} ({})", symbol, interval);
     }
 
-    // ── Dashboard & Threads ────────────────────────────────────────────────────
+    // ── Trade Execution ────────────────────────────────────────────────────────
 
-    void UI::ShowDashboard()
+    bool UI::ExecuteOrder(const std::string& symbol, BrokerSource broker,
+                          OrderSide side, float quantity, float price)
     {
-        ImGui::Begin("Dashboard", &showDashboard_);
+        std::string brokerName = BrokerSourceToString(broker);
 
-        // Update uptime
-        telemetry_.uptimeSec += ImGui::GetIO().DeltaTime;
-        telemetry_.avgFrameMs = 1000.0f / ImGui::GetIO().Framerate;
-
-        // ── Connection Status ──────────────────────────────────────────────
+        if (!liveTradingEnabled_)
         {
-            bool connected = service_->IsConnected();
-            ImVec4 statusCol = connected
-                ? ImVec4(0.15f, 0.85f, 0.40f, 1.f)
-                : ImVec4(0.85f, 0.20f, 0.20f, 1.f);
+            spdlog::info("[DRY-RUN] {} {} x{:.4f} {} @ {:.4f} (broker: {})",
+                         OrderSideStr(side), symbol, quantity, price > 0.f ? "LIMIT" : "MARKET",
+                         price, brokerName);
+            PushToast("DRY-RUN: " + std::string(OrderSideStr(side)) + " " + symbol,
+                      ui::kToastDryRun);
+            return true;
+        }
 
-            ImGui::TextColored(statusCol, "%s", connected ? "CONNECTED" : "DISCONNECTED");
-            ImGui::SameLine();
+        IBrokerDataSource* ds = nullptr;
+        if (broker != BrokerSource::Auto)
+            ds = marketService_->FindBrokerSource(brokerName);
+        else
+            ds = marketService_->GetActiveBrokerSource();
 
-            std::string url = service_->GetServerUrl();
-            if (url == "local://embedded")
-                ImGui::TextDisabled("(monolith)");
-            else
+        auto* connector = dynamic_cast<IBrokerConnector*>(ds);
+        if (!connector)
+        {
+            spdlog::warn("[Trade] No broker connector for '{}' — cannot execute order", brokerName);
+            PushToast("No broker for " + symbol + " — order not sent", ui::kToastWarning);
+            return false;
+        }
+
+        if (connector->GetConnectionState() != WsState::Connected)
+        {
+            spdlog::warn("[Trade] Broker '{}' not connected", brokerName);
+            PushToast("Broker disconnected — order not sent", ui::kToastError);
+            return false;
+        }
+
+        OrderType orderType = (price > 0.f) ? OrderType::Limit : OrderType::Market;
+        auto result = connector->PlaceOrder(symbol, side, orderType, quantity, price);
+
+        if (result.status == OrderStatus::Rejected)
+        {
+            spdlog::error("[Trade] Order rejected: {}", result.errorMsg);
+            PushToast("Order REJECTED: " + result.errorMsg, ui::kToastError);
+            return false;
+        }
+
+        spdlog::info("[Trade] {} {} {} x{:.4f} — orderId: {}",
+                     OrderSideStr(side), symbol, OrderTypeStr(orderType), quantity, result.orderId);
+        PushToast(std::string(OrderSideStr(side)) + " " + symbol + " sent (ID: " + result.orderId + ")",
+                  ui::kToastSuccess);
+        return true;
+    }
+
+    bool UI::ExecuteAIOperation(AIOperation& op)
+    {
+        if (op.executed) return false;
+        if (op.type == OperationType::Hold) return false;
+
+        OrderSide side = (op.type == OperationType::Buy) ? OrderSide::Buy : OrderSide::Sell;
+        BrokerSource broker = BrokerSource::Auto;
+        float quantity = 0.f;
+
+        if (op.strategyId > 0)
+        {
+            for (auto& s : cachedStrategies_)
             {
-                ImGui::TextDisabled("(%s)", url.c_str());
-                auto* remote = dynamic_cast<RemoteStrategyService*>(service_.get());
-                if (remote)
+                if (s.id == op.strategyId)
                 {
-                    float latency = remote->GetLatencyMs();
-                    if (latency >= 0.f)
+                    broker = s.broker;
+                    quantity = s.quantity;
+                    break;
+                }
+            }
+        }
+
+        if (op.strategyId == 0)
+            broker = defaultBroker_;
+        if (quantity <= 0.f) quantity = 1.f;
+
+        float price = (op.type == OperationType::AdjustTP || op.type == OperationType::AdjustSL)
+                    ? op.suggestedPrice : 0.f;
+
+        bool ok = ExecuteOrder(op.symbol, broker, side, quantity, price);
+        if (ok) op.executed = true;
+        return ok;
+    }
+
+    bool UI::ExecuteStrategyTrigger(const Strategy& strategy, StrategyStatus trigger, float exitPrice)
+    {
+        OrderSide side = (strategy.direction == StrategyDirection::Long)
+                       ? OrderSide::Sell : OrderSide::Buy;
+        float quantity = strategy.quantity > 0.f ? strategy.quantity : 1.f;
+
+        spdlog::info("[Trigger] {} {} for {} @ {:.4f} (strategy #{})",
+                     trigger == StrategyStatus::TPHit ? "TP" : "SL",
+                     OrderSideStr(side), strategy.symbol, exitPrice, strategy.id);
+
+        return ExecuteOrder(strategy.symbol, strategy.broker, side, quantity);
+    }
+
+    // ── ViewStrategy ───────────────────────────────────────────────────────────
+
+    void UI::ViewStrategy(const Strategy& s)
+    {
+        float lo = s.entryPrice, hi = s.entryPrice;
+        if (s.takeProfit > 0.f) { lo = std::min(lo, s.takeProfit); hi = std::max(hi, s.takeProfit); }
+        if (s.stopLoss > 0.f)   { lo = std::min(lo, s.stopLoss);   hi = std::max(hi, s.stopLoss); }
+
+        int64_t now = std::time(nullptr);
+        int64_t created = s.createdAt > 0 ? s.createdAt : (s.entryDate > 0 ? s.entryDate : now);
+        int64_t ageSec = now - created;
+
+        const char* interval = "1d";
+        const char* range    = "6mo";
+        int timeframeIdx     = kDefaultTimeframe;
+
+        if (ageSec < 3600 * 4)           { interval = "1m";  range = "1d";  timeframeIdx = 0; }
+        else if (ageSec < 86400)          { interval = "5m";  range = "5d";  timeframeIdx = 2; }
+        else if (ageSec < 86400 * 5)      { interval = "15m"; range = "5d";  timeframeIdx = 3; }
+        else if (ageSec < 86400 * 30)     { interval = "1h";  range = "1mo"; timeframeIdx = 5; }
+        else if (ageSec < 86400 * 90)     { interval = "1d";  range = "6mo"; timeframeIdx = 7; }
+
+        pendingView_.active = true;
+        pendingView_.symbol = s.symbol;
+        pendingView_.priceLo = lo;
+        pendingView_.priceHi = hi;
+
+        for (auto& panel : charts_)
+        {
+            if (panel.symbol == s.symbol && !panel.loading && !panel.quote.candles.empty())
+            {
+                panel.timeframeIdx = timeframeIdx;
+                panel.chart.FocusOnPriceRange(lo, hi);
+                pendingView_.active = false;
+
+                auto* sl = panel.chart.GetStrategyLayer();
+                if (sl) sl->StartEditing(s.id);
+                wizard_.OpenEdit(s);
+                showStrategyWizard_ = true;
+                showStockCharts_ = true;
+                return;
+            }
+        }
+
+        FetchSymbol(s.symbol, interval, range);
+        if (!charts_.empty() && charts_.back().symbol == s.symbol)
+            charts_.back().timeframeIdx = timeframeIdx;
+    }
+
+    // ── GetCurrentPrice ────────────────────────────────────────────────────────
+
+    float UI::GetCurrentPrice(const std::string& symbol) const
+    {
+        // Try cached price first (from broker / RT polling)
+        float cached = marketService_->GetCachedPrice(symbol);
+        if (cached > 0.f) return cached;
+
+        // Fallback to last candle close from any chart
+        for (auto& panel : charts_)
+        {
+            if (panel.symbol == symbol && !panel.quote.candles.empty())
+                return panel.quote.candles.back().close;
+        }
+        for (auto& dc : detachedCharts_)
+        {
+            if (dc.symbol == symbol && !dc.quote.candles.empty())
+                return dc.quote.candles.back().close;
+        }
+        return 0.f;
+    }
+
+    // ── Options ────────────────────────────────────────────────────────────────
+
+    void UI::ShowOptions()
+    {
+        ImGui::SetNextWindowSize(ImVec2(480, 420), ImGuiCond_FirstUseEver);
+        if (!ImGui::Begin("Options", &showOptions_))
+        {
+            ImGui::End();
+            return;
+        }
+
+        auto* app = engine_->appInstance_.get();
+        auto& globals = engine_->globals_;
+        bool changed = false;
+
+        if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            int wm = static_cast<int>(app->GetWindowMode());
+            const char* modeLabels[] = { "Windowed", "Fullscreen", "Borderless Fullscreen" };
+            if (ImGui::Combo("Window Mode", &wm, modeLabels, 3))
+            {
+                app->SetWindowMode(static_cast<WindowMode>(wm));
+                if (globals)
+                    globals->Set(gk::prefix::APP, gk::key::WINDOW_MODE, std::to_string(wm));
+                changed = true;
+            }
+
+            if (app->GetWindowMode() == WindowMode::Windowed)
+            {
+                glm::ivec2 sz = app->GetMainWindowSize();
+                int res[2] = { sz.x, sz.y };
+                const char* presets[] = {
+                    "Custom", "1280x720", "1366x768", "1600x900",
+                    "1920x1080", "2560x1440", "3840x2160"
+                };
+                const int presetW[] = { 0, 1280, 1366, 1600, 1920, 2560, 3840 };
+                const int presetH[] = { 0, 720, 768, 900, 1080, 1440, 2160 };
+                int presetIdx = 0;
+                for (int i = 1; i < 7; ++i)
+                    if (res[0] == presetW[i] && res[1] == presetH[i]) { presetIdx = i; break; }
+
+                if (ImGui::Combo("Resolution", &presetIdx, presets, 7))
+                {
+                    if (presetIdx > 0)
                     {
-                        ImGui::SameLine();
-                        ImVec4 latCol = latency < 50.f ? ImVec4(0.15f, 0.85f, 0.40f, 1.f)
-                                      : latency < 150.f ? ImVec4(0.9f, 0.8f, 0.2f, 1.f)
-                                      : ImVec4(0.85f, 0.20f, 0.20f, 1.f);
-                        ImGui::TextColored(latCol, "%.0fms", latency);
+                        res[0] = presetW[presetIdx]; res[1] = presetH[presetIdx];
+                        app->SetResolution(res[0], res[1]);
+                        if (globals)
+                        {
+                            globals->Set(gk::prefix::APP, gk::key::RESOLUTION_W, std::to_string(res[0]));
+                            globals->Set(gk::prefix::APP, gk::key::RESOLUTION_H, std::to_string(res[1]));
+                        }
+                        changed = true;
                     }
                 }
-            }
-
-            bool monitoring = service_->IsMonitoring();
-            ImGui::SameLine();
-            if (monitoring)
-                ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.f, 1.f), "[Monitoring]");
-            else
-                ImGui::TextDisabled("[Idle]");
-        }
-
-        ImGui::Separator();
-
-        // ── Performance ────────────────────────────────────────────────────
-        if (ImGui::CollapsingHeader("Performance", ImGuiTreeNodeFlags_DefaultOpen))
-        {
-            ImGui::Text("FPS: %.1f  (%.2f ms/frame)", ImGui::GetIO().Framerate, telemetry_.avgFrameMs);
-
-            auto& dbg = engine_->threadDebugInfo_;
-            if (dbg.historyOffset > 0 || dbg.frameHistory[0] > 0.f)
-            {
-                ImGui::PlotLines("##frame", dbg.frameHistory.data(),
-                                 ThreadDebugInfo::kHistorySize, dbg.historyOffset,
-                                 nullptr, 0.f, 33.3f, ImVec2(-1, 40));
-            }
-
-            // Uptime
-            int upH = (int)(telemetry_.uptimeSec / 3600.f);
-            int upM = (int)(std::fmod(telemetry_.uptimeSec, 3600.f) / 60.f);
-            int upS = (int)std::fmod(telemetry_.uptimeSec, 60.f);
-            ImGui::Text("Uptime: %02d:%02d:%02d", upH, upM, upS);
-        }
-
-        // ── Telemetry ──────────────────────────────────────────────────────
-        if (ImGui::CollapsingHeader("Telemetry", ImGuiTreeNodeFlags_DefaultOpen))
-        {
-            ImGui::TextDisabled("Client");
-            ImGui::Text("Market Fetches:    %lld", (long long)telemetry_.marketFetches);
-            ImGui::Text("Chart Refreshes:   %lld", (long long)telemetry_.chartRefreshes);
-            ImGui::Text("Strategy Saves:    %lld", (long long)telemetry_.strategySaves);
-            ImGui::Text("Strategy Deletes:  %lld", (long long)telemetry_.strategyDeletes);
-            ImGui::Text("Open Charts:       %d", (int)charts_.size());
-
-            // Server telemetry (remote mode only, fetched with status polling)
-            auto* remote = dynamic_cast<RemoteStrategyService*>(service_.get());
-            if (remote && service_->IsConnected())
-            {
-                auto st = remote->GetServerTelemetry();
-                ImGui::Spacing();
-                ImGui::TextDisabled("Server");
-                ImGui::Text("Requests Served:   %lld", (long long)st.requestsServed);
-                ImGui::Text("Ticks Broadcast:   %lld", (long long)st.ticksBroadcast);
-                ImGui::Text("Connected Clients: %d", st.clients);
-
-                if (st.uptimeSec > 0)
+                if (presetIdx == 0 && ImGui::InputInt2("Width x Height", res))
                 {
-                    int sH = st.uptimeSec / 3600;
-                    int sM = (st.uptimeSec % 3600) / 60;
-                    int sS = st.uptimeSec % 60;
-                    ImGui::Text("Server Uptime:     %02d:%02d:%02d", sH, sM, sS);
+                    res[0] = std::max(640, res[0]); res[1] = std::max(480, res[1]);
+                    app->SetResolution(res[0], res[1]);
+                    if (globals)
+                    {
+                        globals->Set(gk::prefix::APP, gk::key::RESOLUTION_W, std::to_string(res[0]));
+                        globals->Set(gk::prefix::APP, gk::key::RESOLUTION_H, std::to_string(res[1]));
+                    }
+                    changed = true;
                 }
             }
+            else
+            {
+                glm::ivec2 sz = app->GetMainWindowSize();
+                ImGui::TextDisabled("Current: %dx%d (native)", sz.x, sz.y);
+            }
         }
 
-        // ── Strategies Summary ─────────────────────────────────────────────
-        if (ImGui::CollapsingHeader("Strategies", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader("Performance", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            int activeCount = (int)std::count_if(
-                cachedStrategies_.begin(), cachedStrategies_.end(),
-                [](const Strategy& s) { return s.IsActive(); });
-            int posCount = (int)std::count_if(
-                cachedStrategies_.begin(), cachedStrategies_.end(),
-                [](const Strategy& s) { return s.IsPosition() && s.IsActive(); });
-            int aiCount = (int)std::count_if(
-                cachedStrategies_.begin(), cachedStrategies_.end(),
-                [](const Strategy& s) { return s.IsAI() && s.IsActive(); });
+            bool vsync = app->GetVSync();
+            if (ImGui::Checkbox("VSync", &vsync))
+            {
+                app->SetVSync(vsync);
+                if (globals) globals->Set(gk::prefix::APP, gk::key::VSYNC, vsync ? "1" : "0");
+                changed = true;
+            }
+            ImGui::SameLine(); ImGui::TextDisabled("(?)");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Syncs rendering to monitor refresh rate.\nReduces tearing but may increase input latency.");
 
-            ImGui::Text("Active: %d  |  Positions: %d  |  AI: %d", activeCount, posCount, aiCount);
-            ImGui::Text("Total: %d", (int)cachedStrategies_.size());
+            int fpsTarget = app->GetFPSTarget();
+            const char* fpsLabels[] = { "Unlimited", "30", "60", "120", "144", "240" };
+            const int   fpsValues[] = { 0, 30, 60, 120, 144, 240 };
+            int fpsIdx = 0;
+            for (int i = 1; i < 6; ++i)
+                if (fpsTarget == fpsValues[i]) { fpsIdx = i; break; }
+            if (ImGui::Combo("FPS Limit", &fpsIdx, fpsLabels, 6))
+            {
+                app->SetFPSTarget(fpsValues[fpsIdx]);
+                if (globals) globals->Set(gk::prefix::APP, gk::key::FPS_TARGET, std::to_string(fpsValues[fpsIdx]));
+                changed = true;
+            }
+            if (vsync) ImGui::TextDisabled("FPS limit has no effect while VSync is on.");
 
-            if (!cachedRecommendations_.empty() || !cachedWarnings_.empty() || !cachedOperations_.empty())
-                ImGui::Text("Insights: %zu recs, %zu warnings, %zu ops",
-                             cachedRecommendations_.size(), cachedWarnings_.size(), cachedOperations_.size());
+            ImGui::Separator();
+            ImGui::TextDisabled("Performance Stats");
+            float fps = ImGui::GetIO().Framerate;
+            ImGui::Text("FPS: %.1f (%.2f ms/frame)", fps, 1000.f / fps);
+            auto& td = engine_->threadDebugInfo_;
+            ImGui::Text("Update:  %.2f ms", td.updatePhaseMs);
+            ImGui::Text("Render:  %.2f ms", td.presentPhaseMs);
+            glm::ivec2 sz = app->GetMainWindowSize();
+            ImGui::Text("Viewport: %dx%d", sz.x, sz.y);
         }
+
+        if (ImGui::CollapsingHeader("Appearance"))
+        {
+            if (ImGui::Button("Open Style Editor")) showStyleEditor_ = true;
+            ImGui::SameLine(); ImGui::TextDisabled("Full ImGui style customization");
+            ImGui::Separator(); ImGui::TextDisabled("Quick Themes");
+            if (ImGui::Button("Dark (Default)"))
+            {
+                ImGui::StyleColorsDark();
+                ImVec4* colors = ImGui::GetStyle().Colors;
+                colors[ImGuiCol_WindowBg] = ImVec4(0.08f, 0.08f, 0.10f, 1.00f);
+                colors[ImGuiCol_TitleBg]  = ImVec4(0.06f, 0.06f, 0.08f, 1.00f);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Light")) ImGui::StyleColorsLight();
+            ImGui::SameLine();
+            if (ImGui::Button("Classic")) ImGui::StyleColorsClassic();
+        }
+
+        // Trading and Data & Connections settings are now in the Dashboard panel
+
+        if (changed)
+            ImGui::TextColored(ui::kColorConnected, "Settings saved.");
 
         ImGui::End();
     }
+
+    // ── Threads Debugger ───────────────────────────────────────────────────────
 
     void UI::ShowThreadsDebugger()
     {
@@ -2575,40 +1920,38 @@ namespace stnks
         int   off = td.historyOffset;
         const float avail = ImGui::GetContentRegionAvail().x;
 
-        // ── Channel Timings table with colored bars ─────────────────────────
+        DrawChannelTimingsTable(td, avail);
+        DrawFrameTimeline(td, avail);
+        DrawHistoryPlots(td, off, avail);
+
+        ImGui::End();
+    }
+
+    void UI::DrawChannelTimingsTable(const ThreadDebugInfo& td, float /*avail*/)
+    {
         ImGui::SeparatorText("Channel Timings");
 
         struct Row { const char* label; float ms; bool async; ImVec4 col; };
-        Row rows[] = {
+        std::vector<Row> allRows = {
             { "MAIN",       td.main.durationMs,       false, {0.30f, 0.65f, 1.00f, 1.f} },
             { "RENDERING",  td.rendering.durationMs,  false, {1.00f, 0.55f, 0.20f, 1.f} },
         };
 
-        // Add worker threads dynamically
         auto workerStatus = engine_->threadRegistry_.GetStatus();
-        std::vector<Row> allRows(std::begin(rows), std::end(rows));
-
-        // Predefined colors for workers
         ImVec4 workerColors[] = {
-            {0.40f, 0.90f, 0.80f, 1.f},  // cyan
-            {0.55f, 0.85f, 0.40f, 1.f},  // green
-            {0.90f, 0.40f, 0.85f, 1.f},  // purple
-            {0.85f, 0.85f, 0.20f, 1.f},  // yellow
-            {0.90f, 0.55f, 0.55f, 1.f},  // red
-            {0.55f, 0.55f, 0.90f, 1.f},  // blue
+            {0.40f, 0.90f, 0.80f, 1.f}, {0.55f, 0.85f, 0.40f, 1.f},
+            {0.90f, 0.40f, 0.85f, 1.f}, {0.85f, 0.85f, 0.20f, 1.f},
+            {0.90f, 0.55f, 0.55f, 1.f}, {0.55f, 0.55f, 0.90f, 1.f},
         };
         int colorIdx = 0;
         for (auto& w : workerStatus)
         {
-            ImVec4 col = workerColors[colorIdx % 6];
+            allRows.push_back({ w.name.c_str(), w.lastDurationMs, true, workerColors[colorIdx % 6] });
             colorIdx++;
-            allRows.push_back({ w.name.c_str(), w.lastDurationMs,
-                                true, col });
         }
 
         if (ImGui::BeginTable("##channeltable", 4,
-                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                ImGuiTableFlags_SizingFixedFit))
+                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit))
         {
             ImGui::TableSetupColumn("Channel", ImGuiTableColumnFlags_WidthFixed, 120.f);
             ImGui::TableSetupColumn("ms",      ImGuiTableColumnFlags_WidthFixed,  60.f);
@@ -2622,15 +1965,9 @@ namespace stnks
             for (auto& r : allRows)
             {
                 ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::TextColored(r.col, "%s", r.label);
-
-                ImGui::TableSetColumnIndex(1);
-                ImGui::Text("%.2f", r.ms);
-
-                ImGui::TableSetColumnIndex(2);
-                ImGui::TextDisabled(r.async ? "worker" : "main");
-
+                ImGui::TableSetColumnIndex(0); ImGui::TextColored(r.col, "%s", r.label);
+                ImGui::TableSetColumnIndex(1); ImGui::Text("%.2f", r.ms);
+                ImGui::TableSetColumnIndex(2); ImGui::TextDisabled(r.async ? "worker" : "main");
                 ImGui::TableSetColumnIndex(3);
                 float barW = (r.ms / maxMs) * ImGui::GetContentRegionAvail().x;
                 ImVec2 p = ImGui::GetCursorScreenPos();
@@ -2648,71 +1985,64 @@ namespace stnks
                     td.updatePhaseMs + td.presentPhaseMs,
                     (td.updatePhaseMs + td.presentPhaseMs) > 0.f
                         ? 1000.f / (td.updatePhaseMs + td.presentPhaseMs) : 0.f);
+    }
 
-        // ── Frame Timeline (horizontal stacked bars) ────────────────────────
+    void UI::DrawFrameTimeline(const ThreadDebugInfo& td, float avail)
+    {
         ImGui::SeparatorText("Frame Timeline");
 
         float total = td.updatePhaseMs + td.presentPhaseMs;
-        if (total > 0.f)
+        if (total <= 0.f) { ImGui::TextDisabled("No frame data yet"); return; }
+
+        const float tlW  = avail - 8.f;
+        const float rowH = 20.f;
+        const float gap  = 4.f;
+
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImVec2 origin  = ImGui::GetCursorScreenPos();
+
+        auto drawSegment = [&](float xStart, float dur, ImVec4 col, const char* lbl, float rowY) {
+            float x0 = origin.x + (xStart / total) * tlW;
+            float x1 = origin.x + ((xStart + dur) / total) * tlW;
+            if (x1 <= x0 + 1.f) x1 = x0 + 2.f;
+            ImU32 c = ImGui::ColorConvertFloat4ToU32(col);
+            dl->AddRectFilled({x0, rowY}, {x1, rowY + rowH}, c, 3.f);
+            dl->AddRect({x0, rowY}, {x1, rowY + rowH}, IM_COL32(0,0,0,120), 3.f);
+            ImVec2 tsz = ImGui::CalcTextSize(lbl);
+            if (x1 - x0 > tsz.x + 4.f)
+                dl->AddText({x0 + (x1 - x0 - tsz.x) * 0.5f, rowY + (rowH - tsz.y) * 0.5f},
+                            IM_COL32(255,255,255,230), lbl);
+        };
+
+        float row0 = origin.y;
+        float row1 = row0 + rowH + gap;
+
+        drawSegment(0.f, td.main.durationMs, {0.30f, 0.65f, 1.00f, 0.9f}, "MAIN", row0);
+        drawSegment(td.updatePhaseMs, td.rendering.durationMs, {1.00f, 0.55f, 0.20f, 0.9f}, "RENDER", row0);
+
+        ImVec4 workerColors[] = {
+            {0.40f, 0.90f, 0.80f, 0.9f}, {0.55f, 0.85f, 0.40f, 0.9f},
+            {0.90f, 0.40f, 0.85f, 0.9f}, {0.85f, 0.85f, 0.20f, 0.9f},
+            {0.90f, 0.55f, 0.55f, 0.9f}, {0.55f, 0.55f, 0.90f, 0.9f},
+        };
+        auto workerStatus = engine_->threadRegistry_.GetStatus();
+        float workerOffset = 0.f;
+        int colorIdx = 0;
+        for (auto& w : workerStatus)
         {
-            const float tlW  = avail - 8.f;
-            const float rowH = 20.f;
-            const float gap  = 4.f;
-
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            ImVec2 origin  = ImGui::GetCursorScreenPos();
-
-            auto drawSegment = [&](float xStart, float dur, ImVec4 col,
-                                    const char* lbl, float rowY)
-            {
-                float x0 = origin.x + (xStart / total) * tlW;
-                float x1 = origin.x + ((xStart + dur) / total) * tlW;
-                if (x1 <= x0 + 1.f) x1 = x0 + 2.f;
-                ImU32 c = ImGui::ColorConvertFloat4ToU32(col);
-                dl->AddRectFilled({x0, rowY}, {x1, rowY + rowH}, c, 3.f);
-                dl->AddRect({x0, rowY}, {x1, rowY + rowH}, IM_COL32(0,0,0,120), 3.f);
-                ImVec2 tsz = ImGui::CalcTextSize(lbl);
-                if (x1 - x0 > tsz.x + 4.f)
-                    dl->AddText({x0 + (x1 - x0 - tsz.x) * 0.5f,
-                                 rowY + (rowH - tsz.y) * 0.5f},
-                                IM_COL32(255,255,255,230), lbl);
-            };
-
-            float row0 = origin.y;           // Main thread
-            float row1 = row0 + rowH + gap;  // Workers
-
-            // Main thread: MAIN then RENDERING
-            drawSegment(0.f, td.main.durationMs,
-                        {0.30f, 0.65f, 1.00f, 0.9f}, "MAIN", row0);
-            drawSegment(td.updatePhaseMs, td.rendering.durationMs,
-                        {1.00f, 0.55f, 0.20f, 0.9f}, "RENDER", row0);
-
-            // Workers row: show each worker as segment
-            float workerOffset = 0.f;
-            colorIdx = 0;
-            for (auto& w : workerStatus)
-            {
-                ImVec4 col = workerColors[colorIdx % 6];
-                col.w = 0.9f;
-                colorIdx++;
-                // Scale worker time proportionally
-                float dur = std::min(w.lastDurationMs, total);
-                drawSegment(workerOffset, dur, col, w.name.c_str(), row1);
-                workerOffset += dur;
-            }
-
-            // Row labels
-            dl->AddText({origin.x, row0 + rowH + 2.f}, IM_COL32(180,180,180,160), "main");
-            dl->AddText({origin.x, row1 + rowH + 2.f}, IM_COL32(180,180,180,160), "workers");
-
-            ImGui::Dummy({tlW, rowH * 2.f + gap + 16.f});
-        }
-        else
-        {
-            ImGui::TextDisabled("No frame data yet");
+            float dur = std::min(w.lastDurationMs, total);
+            drawSegment(workerOffset, dur, workerColors[colorIdx % 6], w.name.c_str(), row1);
+            workerOffset += dur;
+            colorIdx++;
         }
 
-        // ── Rolling sparkline histories ─────────────────────────────────────
+        dl->AddText({origin.x, row0 + rowH + 2.f}, IM_COL32(180,180,180,160), "main");
+        dl->AddText({origin.x, row1 + rowH + 2.f}, IM_COL32(180,180,180,160), "workers");
+        ImGui::Dummy({tlW, rowH * 2.f + gap + 16.f});
+    }
+
+    void UI::DrawHistoryPlots(const ThreadDebugInfo& td, int off, float avail)
+    {
         ImGui::SeparatorText("History");
 
         struct Plot { const char* lbl; const float* data; ImVec4 col; };
@@ -2737,8 +2067,85 @@ namespace stnks
                              ImVec2(avail, 45.f));
             ImGui::PopStyleColor();
         }
+    }
 
-        ImGui::End();
+    // ── Toast Notifications ────────────────────────────────────────────────────
+
+    void UI::PushToast(const std::string& msg, const ImVec4& color, float duration)
+    {
+        toasts_.push_back({msg, color, duration, duration});
+    }
+
+    void UI::RenderToasts()
+    {
+        if (toasts_.empty()) return;
+
+        float dt = ImGui::GetIO().DeltaTime;
+        ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+
+        float menuBarHeight = ImGui::GetFrameHeight() + 4.f;
+        float offsetY = menuBarHeight + 8.f;
+        const float padding = 12.f;
+        const float toastWidth = 360.f;
+
+        for (int i = 0; i < (int)toasts_.size(); ++i)
+        {
+            auto& t = toasts_[i];
+            t.lifetime -= dt;
+            if (t.lifetime <= 0.f) continue;
+
+            float alpha = 1.f;
+            if (t.lifetime < 1.f)
+                alpha = t.lifetime;
+            else if (t.lifetime > t.maxLife - 0.3f)
+                alpha = (t.maxLife - t.lifetime) / 0.3f;
+
+            ImGui::SetNextWindowPos(
+                ImVec2(12.f, offsetY), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(toastWidth, 0.f));
+            ImGui::SetNextWindowBgAlpha(0.85f * alpha);
+
+            char winId[32];
+            snprintf(winId, sizeof(winId), "##Toast%d", i);
+
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(padding, padding));
+            ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(t.color.x, t.color.y, t.color.z, 0.6f * alpha));
+
+            ImGuiWindowFlags flags =
+                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing |
+                ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize |
+                ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoMove;
+
+            if (ImGui::Begin(winId, nullptr, flags))
+            {
+                // Colored accent bar on the left edge
+                ImVec2 wMin = ImGui::GetWindowPos();
+                ImVec2 wMax = ImVec2(wMin.x + 4.f, wMin.y + ImGui::GetWindowSize().y);
+                ImGui::GetWindowDrawList()->AddRectFilled(
+                    wMin, wMax,
+                    ImGui::ColorConvertFloat4ToU32(
+                        ImVec4(t.color.x, t.color.y, t.color.z, 0.9f * alpha)),
+                    2.f);
+
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 6.f);
+                ImVec4 col = t.color;
+                col.w = alpha;
+                ImGui::TextColored(col, "%s", t.message.c_str());
+            }
+            ImGui::End();
+
+            ImGui::PopStyleColor(1);
+            ImGui::PopStyleVar(2);
+
+            offsetY += ImGui::GetTextLineHeightWithSpacing() + padding * 2.f + 6.f;
+        }
+
+        toasts_.erase(
+            std::remove_if(toasts_.begin(), toasts_.end(),
+                [](const Toast& t) { return t.lifetime <= 0.f; }),
+            toasts_.end());
     }
 
 } // namespace stnks

@@ -2,6 +2,7 @@
 
 #include <Market/MarketData.hpp>
 #include <Market/IMarketSource.hpp>
+#include <Market/IBrokerDataSource.hpp>
 #include <Http/HttpClient.hpp>
 #include <Threading/ThreadRegistry.hpp>
 #include <string>
@@ -9,6 +10,9 @@
 #include <mutex>
 #include <memory>
 #include <functional>
+#include <unordered_map>
+#include <atomic>
+#include <cstdint>
 
 namespace stnks
 {
@@ -16,6 +20,13 @@ namespace stnks
     {
         std::string symbol;
         StockQuote  quote;
+    };
+
+    // Cached real-time price entry (lock-free read via atomic float)
+    struct PriceCacheEntry
+    {
+        std::atomic<float>   price{0.f};
+        std::atomic<int64_t> timestamp{0};
     };
 
     // Fetches stock data via pluggable IMarketSource implementations.
@@ -26,11 +37,17 @@ namespace stnks
     //   FetchQuoteAsync() / SearchSymbolsAsync() -- submits to ThreadRegistry pool
     //   DrainResults() / DrainSearchResults() -- call from main thread to collect
     //
+    // Real-time price cache:
+    //   GetCachedPrice() -- lock-free read, safe to call every frame
+    //   StartRealtimePolling() -- spawns background thread polling broker source
+    //   StopRealtimePolling() -- stops background polling for a symbol
+    //
     // Uses mutex-guarded queues (MPSC: multiple pool threads push, main thread drains)
     class MarketService
     {
     public:
         MarketService(HttpClient& http, ThreadRegistry& threads);
+        ~MarketService();
 
         // Add a market data source. The first source added becomes the active one.
         void AddSource(std::unique_ptr<IMarketSource> source);
@@ -42,20 +59,51 @@ namespace stnks
         IMarketSource* GetActiveSource() const;
         const std::vector<std::unique_ptr<IMarketSource>>& GetSources() const { return sources_; }
 
-        // Synchronous fetch (blocks calling thread) -- delegates to active source
+        // Get the active source as IBrokerDataSource (nullptr if not a broker source)
+        IBrokerDataSource* GetActiveBrokerSource() const;
+
+        // Find a broker source by name (e.g., "Binance", "GBM+"). Returns nullptr if not found.
+        IBrokerDataSource* FindBrokerSource(const std::string& name) const;
+
+        // Get the Yahoo Finance fallback source (always the first source registered).
+        IMarketSource* GetFallbackSource() const;
+
+        // ── Real-time price cache ─────────────────────────────────────────────────
+
+        // Read cached price — lock-free, safe to call every frame from UI thread.
+        // Returns 0.f if no cached price available.
+        float GetCachedPrice(const std::string& symbol) const;
+
+        // Update the cache (called from background poll thread or broker callback).
+        void UpdatePriceCache(const std::string& symbol, float price);
+
+        // Start background polling for a symbol (~1s interval).
+        // Uses IBrokerDataSource::FetchCurrentPrice if available, else 1m Yahoo fetch.
+        void StartRealtimePolling(const std::string& symbol);
+
+        // Stop background polling for a symbol.
+        void StopRealtimePolling(const std::string& symbol);
+
+        // Stop all polling and wait for threads to exit (call before destruction).
+        void StopAllPolling();
+
+        // Check if a symbol is being polled in real-time.
+        bool IsRealtimePolling(const std::string& symbol) const;
+
+        // ── Synchronous operations ────────────────────────────────────────────────
+
         StockQuote FetchQuote(const std::string& symbol,
                               const std::string& interval = "1d",
                               const std::string& range    = "6mo");
 
-        // Synchronous symbol search
         std::vector<SymbolMatch> SearchSymbols(const std::string& query);
 
-        // Async fetch -- dispatches to thread pool
+        // ── Async operations ──────────────────────────────────────────────────────
+
         void FetchQuoteAsync(const std::string& symbol,
                              const std::string& interval = "1d",
                              const std::string& range    = "6mo");
 
-        // Async symbol search -- dispatches to thread pool
         void SearchSymbolsAsync(const std::string& query);
 
         // Drain completed quote results (call from main/UI thread)
@@ -96,6 +144,17 @@ namespace stnks
 
         std::mutex                       searchMutex_;
         std::vector<std::vector<SymbolMatch>> pendingSearches_;
+
+        // Real-time price cache: symbol → atomic price+timestamp
+        mutable std::mutex cacheMutex_;  // Protects map structure only (not reads of entries)
+        std::unordered_map<std::string, std::unique_ptr<PriceCacheEntry>> priceCache_;
+
+        // Active real-time polling symbols
+        mutable std::mutex pollingMutex_;
+        std::unordered_map<std::string, bool> pollingActive_;  // symbol → running flag
+        std::atomic<int> pollingThreadCount_{0};                // live polling threads
+
+        PriceCacheEntry* GetOrCreateCacheEntry(const std::string& symbol);
     };
 
 } // namespace stnks

@@ -23,7 +23,8 @@ namespace stnks
         explicit HttpClient(ThreadRegistry& threads);
 
         // Synchronous GET (call from any thread)
-        HttpResponse Get(const std::string& url);
+        HttpResponse Get(const std::string& url,
+                         const std::vector<std::pair<std::string,std::string>>& headers = {});
 
         // Synchronous POST with JSON body and optional headers
         HttpResponse Post(const std::string& url, const std::string& body,
@@ -34,7 +35,8 @@ namespace stnks
                          const std::vector<std::pair<std::string,std::string>>& headers = {});
 
         // Synchronous DELETE
-        HttpResponse Delete(const std::string& url);
+        HttpResponse Delete(const std::string& url,
+                            const std::vector<std::pair<std::string,std::string>>& headers = {});
 
         // Async GET — submitted to ThreadRegistry pool, returns future
         std::future<HttpResponse> GetAsync(const std::string& url);

@@ -65,4 +65,36 @@ namespace stnks
         }
     };
 
+    // Sub-panel variant: renders as an indicator panel with its own price axis.
+    // Use this to add extra candlestick views below the main chart (e.g., for
+    // different strategy views, zoomed views, etc.)
+    class CandlestickIndicator : public CandlestickLayer
+    {
+    public:
+        CandlestickIndicator()
+        {
+            name    = "Candles";
+            height  = 120.f;
+            visible = false;  // Hidden by default, user enables via indicator combo
+        }
+
+        bool GetValueRange(const ChartViewport& vp, const StockQuote& data,
+                           float& outMin, float& outMax) const override
+        {
+            if (data.candles.empty()) return false;
+            int end = std::min(vp.visibleStart + vp.visibleCount, (int)data.candles.size());
+            float lo = 1e18f, hi = -1e18f;
+            for (int i = vp.visibleStart; i < end; ++i)
+            {
+                lo = std::min(lo, data.candles[i].low);
+                hi = std::max(hi, data.candles[i].high);
+            }
+            if (lo >= hi) return false;
+            float margin = (hi - lo) * 0.05f;
+            outMin = lo - margin;
+            outMax = hi + margin;
+            return true;
+        }
+    };
+
 } // namespace stnks

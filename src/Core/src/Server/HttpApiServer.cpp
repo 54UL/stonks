@@ -9,6 +9,11 @@ using json = nlohmann::json;
 namespace stnks
 {
     HttpApiServer::HttpApiServer(StrategyStore& store, MarketService& market,
+                                  StrategyServer* server)
+        : HttpApiServer(store, market, server, Config{})
+    {}
+
+    HttpApiServer::HttpApiServer(StrategyStore& store, MarketService& market,
                                   StrategyServer* server, const Config& config)
         : config_(config), store_(store), market_(market), server_(server),
           feedServer_(config.feed)
@@ -246,6 +251,8 @@ namespace stnks
         j["exitPrice"]   = s.exitPrice;
         j["closedPnl"]   = s.closedPnlPct;
         j["enabled"]     = s.enabled;
+        j["entryFee"]    = s.entryFee;
+        j["exitFee"]     = s.exitFee;
         return j.dump();
     }
 
@@ -262,6 +269,7 @@ namespace stnks
         Strategy s;
         try
         {
+            //TODO: WHAT IN THE FUCKING HELL STUPID AI
             auto j = json::parse(jsonStr);
             if (j.contains("id"))          s.id          = j["id"].get<int64_t>();
             if (j.contains("symbol"))      s.symbol      = j["symbol"].get<std::string>();
@@ -281,6 +289,8 @@ namespace stnks
             if (j.contains("exitPrice"))   s.exitPrice   = j["exitPrice"].get<float>();
             if (j.contains("closedPnl"))   s.closedPnlPct = j["closedPnl"].get<float>();
             if (j.contains("enabled"))     s.enabled      = j["enabled"].get<bool>();
+            if (j.contains("entryFee"))    s.entryFee     = j["entryFee"].get<float>();
+            if (j.contains("exitFee"))     s.exitFee      = j["exitFee"].get<float>();
         }
         catch (const std::exception& e)
         {

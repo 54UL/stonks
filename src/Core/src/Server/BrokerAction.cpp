@@ -43,9 +43,7 @@ namespace stnks
             spdlog::info("  Trigger:   {} @ {:.2f}", action, event.currentPrice);
             spdlog::info("  Entry was: {:.2f}", event.strategy.entryPrice);
 
-            float pnlPct = ((event.currentPrice - event.strategy.entryPrice) / event.strategy.entryPrice) * 100.f;
-            if (event.strategy.direction == StrategyDirection::Short)
-                pnlPct = -pnlPct;
+            float pnlPct = event.strategy.UnrealizedPnLPercent(event.currentPrice);
 
             spdlog::info("  P&L:       {}{:.1f}%", pnlPct >= 0.f ? "+" : "", pnlPct);
             return true;

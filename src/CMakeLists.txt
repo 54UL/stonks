@@ -19,11 +19,20 @@ else()
     message(WARNING "No vcpkg toolchain found. Set VCPKG_ROOT env var or pass -DVCPKG_ROOT=<path>")
 endif()
 
+option(STNKS_HEADLESS "Build server-only without graphics (SDL2, OpenGL, ImGui)" OFF)
+
 add_subdirectory(Core)
-message(STATUS "Compiling stnks (UI)")
-add_subdirectory(Entry)
+
+if(NOT STNKS_HEADLESS)
+    message(STATUS "Compiling stnks (UI)")
+    add_subdirectory(Entry)
+endif()
+
 message(STATUS "Compiling stnks-server (headless)")
 add_subdirectory(Server)
-message(STATUS "Compiling stnks-tests")
-enable_testing()
-add_subdirectory(Tests)
+
+if(NOT STNKS_HEADLESS)
+    message(STATUS "Compiling stnks-tests")
+    enable_testing()
+    add_subdirectory(Tests)
+endif()

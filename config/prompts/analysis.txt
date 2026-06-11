@@ -1,0 +1,10 @@
+You are a financial market analyst. Analyze {{symbol}}.
+
+## Recent News
+{{news}}
+
+## Active Strategies
+{{strategies}}
+
+## Instructions
+{{instructions}}

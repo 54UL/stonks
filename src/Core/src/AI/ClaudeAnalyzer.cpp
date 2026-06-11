@@ -1,4 +1,5 @@
 #include <AI/ClaudeAnalyzer.hpp>
+#include <AI/PromptTemplate.hpp>
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 #include <ctime>
@@ -6,14 +7,44 @@
 
 namespace stnks
 {
+    // ── Default embedded templates (used when files are missing) ─────────────
+
+    static const char* kDefaultAnalysis =
+        "You are a financial market analyst. Analyze {{symbol}}.\n\n"
+        "## Recent News\n{{news}}\n\n"
+        "## Active Strategies\n{{strategies}}\n\n"
+        "## Instructions\n{{instructions}}";
+
+    static const char* kDefaultAnalysisContext =
+        "You are a financial market analyst. Analyze {{symbol}}.\n\n"
+        "## Chart Summary\n{{chart_summary}}\n\n"
+        "## Recent Technical Events\n{{events}}\n\n"
+        "## Detected Patterns\n{{patterns}}\n\n"
+        "## Recent News\n{{news}}\n\n"
+        "## Active Strategies\n{{strategies}}\n\n"
+        "## Instructions\n{{instructions}}";
+
+    static const char* kDefaultInstructions =
+        "Respond with JSON only. Three arrays:\n"
+        "1. \"recommendations\" - [{title, body}] actionable trade ideas\n"
+        "2. \"warnings\" - [{title, body, severity: info|warning|alert}] risk alerts\n"
+        "3. \"operations\" - [{strategy_id, action: hold|buy|sell|adjust_tp|adjust_sl, "
+        "urgency: info|warning|alert, reason, suggested_price, confidence: 0-1}]\n"
+        "   strategy_id=0 means new position. Keep concise (1-2 sentences each).";
+
+    // ── Constructor ──────────────────────────────────────────────────────────
+
     ClaudeAnalyzer::ClaudeAnalyzer(HttpClient& http, const Config& config)
         : http_(http), config_(config)
     {
         if (config_.apiKey.empty())
             spdlog::info("[ClaudeAnalyzer] No API key — running in dry-run mode");
         else
-            spdlog::info("[ClaudeAnalyzer] Initialized with model '{}'", config_.model);
+            spdlog::info("[ClaudeAnalyzer] Initialized with model '{}', prompts dir: '{}'",
+                         config_.model, config_.promptsDir);
     }
+
+    // ── Analysis entry points ────────────────────────────────────────────────
 
     AnalysisResult ClaudeAnalyzer::Analyze(
         const std::string& symbol,
@@ -23,9 +54,9 @@ namespace stnks
         if (config_.apiKey.empty())
             return DryRunAnalysis(symbol, news);
 
-        std::string prompt = BuildPrompt(symbol, news, activeStrategies);
+        auto vars = BuildVars(symbol, news, activeStrategies);
+        std::string prompt = RenderPrompt("analysis.txt", vars, kDefaultAnalysis);
 
-        // Build Claude API request
         nlohmann::json request;
         request["model"] = config_.model;
         request["max_tokens"] = 1024;
@@ -33,10 +64,8 @@ namespace stnks
             {{"role", "user"}, {"content", prompt}}
         });
 
-        std::string body = request.dump();
-
         auto response = http_.Post(
-            "https://api.anthropic.com/v1/messages", body,
+            "https://api.anthropic.com/v1/messages", request.dump(),
             {
                 {"x-api-key",         config_.apiKey},
                 {"anthropic-version", "2023-06-01"}
@@ -52,13 +81,50 @@ namespace stnks
         return ParseResponse(symbol, response.body);
     }
 
+    AnalysisResult ClaudeAnalyzer::AnalyzeWithContext(
+        const std::string& symbol,
+        const std::vector<NewsArticle>& news,
+        const std::vector<Strategy>& activeStrategies,
+        const ChartContext& chartCtx)
+    {
+        if (config_.apiKey.empty())
+            return DryRunAnalysis(symbol, news);
+
+        auto vars = BuildVarsWithContext(symbol, news, activeStrategies, chartCtx);
+        std::string prompt = RenderPrompt("analysis_context.txt", vars, kDefaultAnalysisContext);
+
+        nlohmann::json request;
+        request["model"] = config_.model;
+        request["max_tokens"] = 1024;
+        request["messages"] = nlohmann::json::array({
+            {{"role", "user"}, {"content", prompt}}
+        });
+
+        auto response = http_.Post(
+            "https://api.anthropic.com/v1/messages", request.dump(),
+            {
+                {"x-api-key",         config_.apiKey},
+                {"anthropic-version", "2023-06-01"}
+            });
+
+        if (!response.Ok())
+        {
+            spdlog::error("[ClaudeAnalyzer] API call failed for '{}': {} {}",
+                          symbol, response.statusCode, response.error);
+            return DryRunAnalysis(symbol, news);
+        }
+
+        return ParseResponse(symbol, response.body);
+    }
+
+    // ── Async variants ───────────────────────────────────────────────────────
+
     void ClaudeAnalyzer::AnalyzeAsync(
         const std::string& symbol,
         const std::vector<NewsArticle>& news,
         const std::vector<Strategy>& activeStrategies,
         ThreadRegistry& threads)
     {
-        // Copy data for thread safety
         auto newsCopy = news;
         auto strategiesCopy = activeStrategies;
 
@@ -70,56 +136,165 @@ namespace stnks
         });
     }
 
-    std::string ClaudeAnalyzer::BuildPrompt(
+    void ClaudeAnalyzer::AnalyzeAsyncWithContext(
         const std::string& symbol,
         const std::vector<NewsArticle>& news,
-        const std::vector<Strategy>& activeStrategies)
+        const std::vector<Strategy>& activeStrategies,
+        const ChartContext& chartCtx,
+        ThreadRegistry& threads)
     {
+        auto newsCopy = news;
+        auto strategiesCopy = activeStrategies;
+        auto ctxCopy = chartCtx;
+
+        threads.Submit([this, symbol, newsCopy = std::move(newsCopy),
+                        strategiesCopy = std::move(strategiesCopy),
+                        ctxCopy = std::move(ctxCopy)]() {
+            auto result = AnalyzeWithContext(symbol, newsCopy, strategiesCopy, ctxCopy);
+            std::lock_guard<std::mutex> lock(mutex_);
+            pending_.push_back(std::move(result));
+        });
+    }
+
+    // ── Template rendering ───────────────────────────────────────────────────
+
+    std::string ClaudeAnalyzer::RenderPrompt(
+        const std::string& templateFile,
+        const std::unordered_map<std::string, std::string>& vars,
+        const std::string& fallback) const
+    {
+        std::string path = config_.promptsDir + templateFile;
+        return PromptTemplate::LoadAndRender(path, vars, fallback);
+    }
+
+    std::string ClaudeAnalyzer::LoadInstructions() const
+    {
+        std::string content;
+        std::string path = config_.promptsDir + "instructions.txt";
+        if (PromptTemplate::LoadFile(path, content))
+            return content;
+        return kDefaultInstructions;
+    }
+
+    // ── Variable builders ────────────────────────────────────────────────────
+
+    std::unordered_map<std::string, std::string> ClaudeAnalyzer::BuildVars(
+        const std::string& symbol,
+        const std::vector<NewsArticle>& news,
+        const std::vector<Strategy>& activeStrategies) const
+    {
+        return {
+            {"symbol",       symbol},
+            {"news",         FormatNews(news)},
+            {"strategies",   FormatStrategies(symbol, activeStrategies)},
+            {"instructions", LoadInstructions()},
+        };
+    }
+
+    std::unordered_map<std::string, std::string> ClaudeAnalyzer::BuildVarsWithContext(
+        const std::string& symbol,
+        const std::vector<NewsArticle>& news,
+        const std::vector<Strategy>& activeStrategies,
+        const ChartContext& chartCtx) const
+    {
+        return {
+            {"symbol",        symbol},
+            {"news",          FormatNews(news)},
+            {"strategies",    FormatStrategies(symbol, activeStrategies)},
+            {"chart_summary", FormatChartSummary(chartCtx)},
+            {"events",        FormatEvents(chartCtx)},
+            {"patterns",      FormatPatterns(chartCtx)},
+            {"instructions",  LoadInstructions()},
+        };
+    }
+
+    // ── Format helpers ───────────────────────────────────────────────────────
+
+    std::string ClaudeAnalyzer::FormatNews(const std::vector<NewsArticle>& news)
+    {
+        if (news.empty()) return "No recent news available.";
         std::ostringstream ss;
-        ss << "You are a financial market analyst. Analyze the following for " << symbol << ".\n\n";
-
-        ss << "## Recent News\n";
-        if (news.empty())
-            ss << "No recent news available.\n";
-        else
+        for (size_t i = 0; i < std::min(news.size(), (size_t)5); ++i)
         {
-            for (size_t i = 0; i < news.size(); ++i)
-            {
-                ss << (i + 1) << ". " << news[i].title << "\n";
-                if (!news[i].description.empty())
-                    ss << "   " << news[i].description << "\n";
-                ss << "   Source: " << news[i].source << " | " << news[i].publishedAt << "\n\n";
-            }
+            ss << (i + 1) << ". " << news[i].title;
+            if (!news[i].source.empty()) ss << " (" << news[i].source << ")";
+            ss << "\n";
         }
-
-        ss << "## Active Strategies\n";
-        if (activeStrategies.empty())
-            ss << "No active strategies.\n";
-        else
-        {
-            for (auto& s : activeStrategies)
-            {
-                if (s.symbol != symbol) continue;
-                ss << "- " << StrategyTypeToString(s.type) << " "
-                   << DirectionToString(s.direction) << " @ " << s.entryPrice;
-                if (s.IsTPSL())
-                    ss << " TP:" << s.takeProfit << " SL:" << s.stopLoss;
-                ss << "\n";
-            }
-        }
-
-        ss << "\n## Instructions\n"
-           << "Provide your analysis as JSON with three arrays:\n"
-           << "1. \"recommendations\" - actionable trade ideas (title + body)\n"
-           << "2. \"warnings\" - risk alerts or negative signals (title + body + severity: info/warning/alert)\n"
-           << "3. \"operations\" - specific trade actions on existing positions:\n"
-           << "   Each operation: {strategy_id, action: hold/buy/sell/adjust_tp/adjust_sl, "
-           << "urgency: info/warning/alert, reason, suggested_price, confidence: 0-1}\n"
-           << "   strategy_id=0 means a new position suggestion.\n"
-           << "Keep each item concise (1-2 sentences).\n";
-
         return ss.str();
     }
+
+    std::string ClaudeAnalyzer::FormatStrategies(
+        const std::string& symbol,
+        const std::vector<Strategy>& strategies)
+    {
+        std::ostringstream ss;
+        bool any = false;
+        for (auto& s : strategies)
+        {
+            if (s.symbol != symbol) continue;
+            any = true;
+            ss << "- id:" << s.id << " " << StrategyTypeToString(s.type) << " "
+               << DirectionToString(s.direction) << " @ " << s.entryPrice;
+            if (s.IsTPSL()) ss << " TP:" << s.takeProfit << " SL:" << s.stopLoss;
+            if (s.quantity > 0.f) ss << " qty:" << s.quantity;
+            ss << "\n";
+        }
+        if (!any) ss << "None.";
+        return ss.str();
+    }
+
+    std::string ClaudeAnalyzer::FormatChartSummary(const ChartContext& ctx)
+    {
+        std::ostringstream ss;
+        ss << "- Current Price: " << ctx.currentPrice << "\n";
+        if (ctx.open24h > 0.f)
+            ss << "- Open: " << ctx.open24h
+               << " | High: " << ctx.high24h
+               << " | Low: " << ctx.low24h << "\n";
+        if (ctx.changePct24h != 0.f)
+            ss << "- Change: " << (ctx.changePct24h > 0 ? "+" : "") << ctx.changePct24h << "%\n";
+        if (ctx.volume24h > 0.f)
+            ss << "- Volume: " << ctx.volume24h << "\n";
+        if (ctx.rsi14 > 0.f)
+            ss << "- RSI(14): " << ctx.rsi14 << "\n";
+        if (ctx.ema20 > 0.f)
+            ss << "- EMA(20): " << ctx.ema20 << " | EMA(50): " << ctx.ema50 << "\n";
+        return ss.str();
+    }
+
+    std::string ClaudeAnalyzer::FormatEvents(const ChartContext& ctx)
+    {
+        if (ctx.recentEvents.empty()) return "No recent events.";
+        std::ostringstream ss;
+        int count = 0;
+        for (auto& ev : ctx.recentEvents)
+        {
+            if (++count > 15)
+            {
+                ss << "... and " << ((int)ctx.recentEvents.size() - 15) << " more\n";
+                break;
+            }
+            ss << "- [" << EventSourceName(ev.source) << "] " << ev.title;
+            if (!ev.detail.empty()) ss << " (" << ev.detail << ")";
+            ss << "\n";
+        }
+        return ss.str();
+    }
+
+    std::string ClaudeAnalyzer::FormatPatterns(const ChartContext& ctx)
+    {
+        if (ctx.recentPatterns.empty()) return "No patterns detected.";
+        std::ostringstream ss;
+        for (auto& pm : ctx.recentPatterns)
+        {
+            ss << "- " << pm.patternName << " (score: " << (int)(pm.score * 100) << "%";
+            if (!pm.description.empty()) ss << ", " << pm.description;
+            ss << ")\n";
+        }
+        return ss.str();
+    }
+
+    // ── Response parsing ─────────────────────────────────────────────────────
 
     AnalysisResult ClaudeAnalyzer::ParseResponse(const std::string& symbol, const std::string& responseBody)
     {
@@ -130,7 +305,6 @@ namespace stnks
         {
             auto doc = nlohmann::json::parse(responseBody);
 
-            // Extract from Claude response format
             std::string content;
             if (doc.contains("content") && doc["content"].is_array() && !doc["content"].empty())
                 content = doc["content"][0].value("text", "");
@@ -142,7 +316,12 @@ namespace stnks
                 return result;
             }
 
-            // Try to parse the content as JSON
+            // Find JSON block in content (may be wrapped in ```json ... ```)
+            size_t jsonStart = content.find('{');
+            size_t jsonEnd = content.rfind('}');
+            if (jsonStart != std::string::npos && jsonEnd != std::string::npos && jsonEnd > jsonStart)
+                content = content.substr(jsonStart, jsonEnd - jsonStart + 1);
+
             auto analysis = nlohmann::json::parse(content);
             int64_t now = std::time(nullptr);
 
@@ -172,8 +351,8 @@ namespace stnks
 
                     std::string sev = w.value("severity", "info");
                     if (sev == "alert")        insight.severity = InsightSeverity::Alert;
-                    else if (sev == "warning")  insight.severity = InsightSeverity::Warning;
-                    else                        insight.severity = InsightSeverity::Info;
+                    else if (sev == "warning") insight.severity = InsightSeverity::Warning;
+                    else                       insight.severity = InsightSeverity::Info;
 
                     result.warnings.push_back(std::move(insight));
                 }
@@ -192,11 +371,11 @@ namespace stnks
                     op.timestamp  = now;
 
                     std::string action = o.value("action", "hold");
-                    if (action == "buy")          op.type = OperationType::Buy;
-                    else if (action == "sell")    op.type = OperationType::Sell;
-                    else if (action == "adjust_tp") op.type = OperationType::AdjustTP;
-                    else if (action == "adjust_sl") op.type = OperationType::AdjustSL;
-                    else                          op.type = OperationType::Hold;
+                    if (action == "buy")            op.type = OperationType::Buy;
+                    else if (action == "sell")       op.type = OperationType::Sell;
+                    else if (action == "adjust_tp")  op.type = OperationType::AdjustTP;
+                    else if (action == "adjust_sl")  op.type = OperationType::AdjustSL;
+                    else                            op.type = OperationType::Hold;
 
                     std::string urg = o.value("urgency", "info");
                     if (urg == "alert")          op.urgency = InsightSeverity::Alert;
@@ -223,7 +402,6 @@ namespace stnks
         result.symbol = symbol;
         int64_t now = std::time(nullptr);
 
-        // Generate placeholder insights from news headlines
         if (!news.empty())
         {
             MarketInsight rec;
@@ -235,7 +413,6 @@ namespace stnks
             rec.timestamp = now;
             result.recommendations.push_back(std::move(rec));
 
-            // Check for negative keywords in headlines
             for (auto& article : news)
             {
                 std::string lower = article.title;

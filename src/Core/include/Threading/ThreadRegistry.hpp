@@ -128,7 +128,7 @@ namespace stnks
                 fn(begin, end);
             }
 
-            for (auto& f : futures) f.get();
+            for (auto& f : futures) f.get(); //mmmmmm
         }
 
         // ── Debug / introspection ────────────────────────────────────────────────

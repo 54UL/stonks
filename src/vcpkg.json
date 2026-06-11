@@ -4,16 +4,35 @@
     "builtin-baseline": "587cd223b4ec2f95ac49d393843107bdbd9d8d76",
     "dependencies": [
       "spdlog",
-      "sdl2",
-      "glew",
-      "glm",
-      "stb",
       "cereal",
       "nlohmann-json",
       "cpr",
       "sqlite3",
       "cpp-httplib",
-      "gtest",
-      "enet"
-    ]
+      "enet",
+      "ixwebsocket",
+      "openssl"
+    ],
+    "default-features": ["gui"],
+    "features": {
+      "gui": {
+        "description": "Build with graphics (SDL2, OpenGL, ImGui, Charts, UI)",
+        "dependencies": [
+          {
+            "name": "sdl2",
+            "default-features": false,
+            "features": ["x11"],
+            "platform": "linux"
+          },
+          {
+            "name": "sdl2",
+            "platform": "!linux"
+          },
+          "glew",
+          "glm",
+          "stb",
+          "gtest"
+        ]
+      }
+    }
   }

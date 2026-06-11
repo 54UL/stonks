@@ -37,6 +37,42 @@ namespace stnks
         bool weekendsOff; // True for traditional markets
     };
 
+    // Currency info for a market
+    struct CurrencyInfo
+    {
+        const char* symbol;   // "$", "MX$"
+        const char* code;     // "USD", "MXN"
+    };
+
+    // Get currency for a symbol or market type
+    inline CurrencyInfo GetCurrency(MarketType type)
+    {
+        switch (type)
+        {
+        case MarketType::Mexico:  return {"MX$", "MXN"};
+        case MarketType::US:
+        case MarketType::Crypto:
+        default:                  return {"$", "USD"};
+        }
+    }
+
+    inline CurrencyInfo GetCurrency(const std::string& symbol);  // forward — defined after ClassifySymbol
+
+    // Format a price with currency symbol into a buffer. Returns pointer to buf.
+    inline const char* FmtPrice(char* buf, int bufSize, float price, const std::string& symbol)
+    {
+        auto c = GetCurrency(symbol);
+        snprintf(buf, bufSize, "%s%.2f", c.symbol, price);
+        return buf;
+    }
+
+    inline const char* FmtPrice4(char* buf, int bufSize, float price, const std::string& symbol)
+    {
+        auto c = GetCurrency(symbol);
+        snprintf(buf, bufSize, "%s%.4f", c.symbol, price);
+        return buf;
+    }
+
     // Static utility — no state needed
     class MarketHours
     {
@@ -111,18 +147,20 @@ namespace stnks
             int openMin    = schedule.openHour * 60 + schedule.openMin;
             int closeMin   = schedule.closeHour * 60 + schedule.closeMin;
 
-            if (currentMin >= openMin && currentMin < closeMin)
+            // Treat +-15min around open/close as Open to catch transitions
+            static constexpr int kBufferMin = 15;
+            if (currentMin >= (openMin - kBufferMin) && currentMin < (closeMin + kBufferMin))
                 return MarketState::Open;
 
-            // Pre-market: 4:00 - open (US only concept, but apply generically 90min before)
-            int preMarketStart = openMin - 90; // 90 min before open
+            // Pre-market: 90min before the buffered open window
+            int preMarketStart = openMin - kBufferMin - 90;
             if (preMarketStart < 0) preMarketStart = 0;
-            if (currentMin >= preMarketStart && currentMin < openMin)
+            if (currentMin >= preMarketStart && currentMin < (openMin - kBufferMin))
                 return MarketState::PreMarket;
 
-            // After hours: close to close+240min (4 hours after)
+            // After hours: from buffered close to +240min past regular close
             int afterEnd = closeMin + 240;
-            if (currentMin >= closeMin && currentMin < afterEnd)
+            if (currentMin >= (closeMin + kBufferMin) && currentMin < afterEnd)
                 return MarketState::AfterHours;
 
             return MarketState::Closed;
@@ -268,5 +306,11 @@ namespace stnks
             return localTm;
         }
     };
+
+    // Deferred inline — needs MarketHours::ClassifySymbol
+    inline CurrencyInfo GetCurrency(const std::string& symbol)
+    {
+        return GetCurrency(MarketHours::ClassifySymbol(symbol));
+    }
 
 } // namespace stnks

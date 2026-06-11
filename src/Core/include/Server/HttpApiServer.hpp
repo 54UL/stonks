@@ -43,7 +43,9 @@ namespace stnks
         };
 
         HttpApiServer(StrategyStore& store, MarketService& market,
-                      StrategyServer* server, const Config& config = {});
+                      StrategyServer* server);
+        HttpApiServer(StrategyStore& store, MarketService& market,
+                      StrategyServer* server, const Config& config);
         ~HttpApiServer();
 
         void Start();

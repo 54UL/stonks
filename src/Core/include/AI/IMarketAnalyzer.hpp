@@ -2,6 +2,8 @@
 
 #include <Strategy/Strategy.hpp>
 #include <News/NewsService.hpp>
+#include <Events/GraphEvent.hpp>
+#include <Market/MarketData.hpp>
 #include <string>
 #include <vector>
 #include <cstdint>
@@ -83,6 +85,27 @@ namespace stnks
         std::string                error;
     };
 
+    // Lightweight chart context for AI analysis — avoids sending raw candle arrays
+    struct ChartContext
+    {
+        float currentPrice  = 0.f;
+        float open24h       = 0.f;
+        float high24h       = 0.f;
+        float low24h        = 0.f;
+        float volume24h     = 0.f;
+        float changePct24h  = 0.f;  // % change over period
+        float rsi14         = 0.f;  // Latest RSI(14) value
+        float ema20         = 0.f;  // Latest EMA(20)
+        float ema50         = 0.f;  // Latest EMA(50)
+        std::string interval;       // e.g. "1d", "1h"
+
+        // Graph events summary (filtered by time range)
+        std::vector<GraphEvent> recentEvents;
+
+        // Pattern matches within window
+        std::vector<PatternMatch> recentPatterns;
+    };
+
     // Interface for AI-powered market analysis.
     // Implementations can use Claude API, local models, or rule-based logic.
     class IMarketAnalyzer
@@ -98,6 +121,17 @@ namespace stnks
             const std::string& symbol,
             const std::vector<NewsArticle>& news,
             const std::vector<Strategy>& activeStrategies) = 0;
+
+        // Extended analysis with chart context + events
+        virtual AnalysisResult AnalyzeWithContext(
+            const std::string& symbol,
+            const std::vector<NewsArticle>& news,
+            const std::vector<Strategy>& activeStrategies,
+            const ChartContext& chartCtx)
+        {
+            // Default: fall back to basic analysis (backwards compatible)
+            return Analyze(symbol, news, activeStrategies);
+        }
 
         // Check if the analyzer is configured and ready
         virtual bool IsAvailable() const = 0;

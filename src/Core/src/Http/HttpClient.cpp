@@ -7,11 +7,14 @@ namespace stnks
     //TODO: IMPROVE AND REFACTOR!!!
     HttpClient::HttpClient(ThreadRegistry& threads) : threads_(threads) {}
 
-    HttpResponse HttpClient::Get(const std::string& url)
+    HttpResponse HttpClient::Get(const std::string& url,
+                                   const std::vector<std::pair<std::string,std::string>>& headers)
     {
         spdlog::debug("[HttpClient] GET {}", url);
+        cpr::Header h{{"User-Agent", "STNKS/1.0"}};
+        for (auto& [k, v] : headers) h[k] = v;
         auto r = cpr::Get(cpr::Url{url},
-                          cpr::Header{{"User-Agent", "STNKS/1.0"}},
+                          h,
                           cpr::Timeout{10000});
 
         HttpResponse resp;
@@ -78,11 +81,14 @@ namespace stnks
         return resp;
     }
 
-    HttpResponse HttpClient::Delete(const std::string& url)
+    HttpResponse HttpClient::Delete(const std::string& url,
+                                     const std::vector<std::pair<std::string,std::string>>& headers)
     {
         spdlog::debug("[HttpClient] DELETE {}", url);
+        cpr::Header h{{"User-Agent", "STNKS/1.0"}};
+        for (auto& [k, v] : headers) h[k] = v;
         auto r = cpr::Delete(cpr::Url{url},
-                              cpr::Header{{"User-Agent", "STNKS/1.0"}},
+                              h,
                               cpr::Timeout{10000});
 
         HttpResponse resp;

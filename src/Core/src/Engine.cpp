@@ -9,8 +9,12 @@
 #endif
 
 namespace stnks {
+#ifndef STNKS_HEADLESS
     Engine::Engine(std::shared_ptr<App> appInstance) : appInstance_(appInstance) {
     }
+#else
+    Engine::Engine() {}
+#endif
 
     Engine::~Engine() {
         threadRegistry_.Shutdown();
@@ -92,6 +96,7 @@ namespace stnks {
     void Engine::Init() {
         ConfigResource();
 
+#ifndef STNKS_HEADLESS
         auto mainWindowSize = appInstance_->GetMainWindowSize();
         renderEngine_.SetScreenSize(mainWindowSize.x, mainWindowSize.y);
 
@@ -100,6 +105,7 @@ namespace stnks {
         camera_->underylingTransform.setGlobalPosition({0.0f, 0.0f, -1.0f});
         camera_->Init(GetDependency(Engine));
         renderEngine_.AddRenderable(camera_);
+#endif
 
         spdlog::info("[Engine] Initialized - stnks finance tool ready");
     }
@@ -122,6 +128,7 @@ namespace stnks {
     }
 
     void Engine::PresentFrame() {
+#ifndef STNKS_HEADLESS
         using Clock = std::chrono::high_resolution_clock;
         using Ms = std::chrono::duration<float, std::milli>;
 
@@ -137,9 +144,12 @@ namespace stnks {
         threadDebugInfo_.PushSample();
 
         inputSystem_.ResetState();
+#endif
     }
 
+#ifndef STNKS_HEADLESS
     PlayerInput *Engine::GetInputSystem() {
         return &inputSystem_;
     }
+#endif
 } // namespace stnks

@@ -2,6 +2,7 @@
 
 #include <Strategy/Strategy.hpp>
 #include <Charts/ChartLayer.hpp>
+#include <Market/MarketHours.hpp>
 #include <imgui.h>
 #include <string>
 #include <vector>
@@ -22,13 +23,15 @@ namespace stnks
         enum class TimeMode { Current, Historical };
 
         void OpenCreate(const std::string& symbol, StrategyType type,
-                        StrategyDirection direction, float currentPrice)
+                        StrategyDirection direction, float currentPrice,
+                        float visiblePriceRange = 0.f)
         {
             mode_ = Mode::Create;
             timeMode_ = TimeMode::Current;
             selectedCandle_ = -1;
             confirmed_ = false;
             cancelled_ = false;
+            visibleRange_ = visiblePriceRange;
 
             strategy_ = Strategy{};
             strategy_.symbol    = symbol;
@@ -39,16 +42,16 @@ namespace stnks
 
             if (type == StrategyType::TPSL)
             {
-                float offset = currentPrice * 0.05f;
+                float offset = ComputeDefaultOffset(currentPrice);
                 if (direction == StrategyDirection::Long)
                 {
                     strategy_.takeProfit = currentPrice + offset;
-                    strategy_.stopLoss   = currentPrice - offset * 0.6f;
+                    strategy_.stopLoss   = currentPrice - offset;
                 }
                 else
                 {
                     strategy_.takeProfit = currentPrice - offset;
-                    strategy_.stopLoss   = currentPrice + offset * 0.6f;
+                    strategy_.stopLoss   = currentPrice + offset;
                 }
             }
 
@@ -157,7 +160,12 @@ namespace stnks
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.25f, 0.42f, 1.f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.35f, 0.55f, 1.f));
 
-            bool visible = ImGui::Begin("Strategy Wizard", pOpen);
+            const char* wizTitle = (mode_ == Mode::Edit)
+                ? "Strategy Wizard [EDIT]###StrategyWizard"
+                : (mode_ == Mode::Create)
+                    ? "Strategy Wizard [NEW]###StrategyWizard"
+                    : "Strategy Wizard###StrategyWizard";
+            bool visible = ImGui::Begin(wizTitle, pOpen);
 
             if (visible)
             {
@@ -264,6 +272,14 @@ namespace stnks
         }
 
     private:
+        // Compute TP/SL offset relative to visible chart range (or fallback to 2% of price)
+        float ComputeDefaultOffset(float price) const
+        {
+            if (visibleRange_ > 0.f)
+                return visibleRange_ * 0.25f; // 25% of visible price range
+            return price * 0.02f;             // fallback: 2% of price
+        }
+
         Mode      mode_      = Mode::Closed;
         TimeMode  timeMode_  = TimeMode::Current;
         Strategy  strategy_;
@@ -271,6 +287,7 @@ namespace stnks
         bool      confirmed_ = false;
         bool      cancelled_ = false;
         bool      firstOpen_ = true;
+        float     visibleRange_ = 0.f;
 
         // Historical click detection (set in PreUpdate, consumed in Draw)
         int                        chartClickCandle_       = -1;
@@ -279,6 +296,43 @@ namespace stnks
 
         char symbolBuf_[64] = "";
         char notesBuf_[256] = "";
+
+        void DrawTPSLFields()
+        {
+            // Take Profit
+            ImGui::TextDisabled("Take Profit");
+            ImGui::SetNextItemWidth(-50.f);
+            ImGui::InputFloat("##wizTP", &strategy_.takeProfit, 0.f, 0.f, "%.4f");
+            if (strategy_.takeProfit > 0.f && strategy_.entryPrice > 0.f)
+            {
+                float pct = strategy_.TPPercent();
+                ImGui::SameLine();
+                ImVec4 col = pct >= 0.f ? ImVec4(0.3f, 0.9f, 0.5f, 1.f) : ImVec4(0.9f, 0.3f, 0.3f, 1.f);
+                ImGui::TextColored(col, "%+.2f%%", pct);
+            }
+
+            // Stop Loss
+            ImGui::TextDisabled("Stop Loss");
+            ImGui::SetNextItemWidth(-50.f);
+            ImGui::InputFloat("##wizSL", &strategy_.stopLoss, 0.f, 0.f, "%.4f");
+            if (strategy_.stopLoss > 0.f && strategy_.entryPrice > 0.f)
+            {
+                float pct = strategy_.SLPercent();
+                ImGui::SameLine();
+                ImVec4 col = pct >= 0.f ? ImVec4(0.3f, 0.9f, 0.5f, 1.f) : ImVec4(0.9f, 0.3f, 0.3f, 1.f);
+                ImGui::TextColored(col, "%+.2f%%", pct);
+            }
+
+            // R:R
+            float rr = strategy_.RiskReward();
+            if (rr > 0.f)
+            {
+                ImVec4 rrCol = rr >= 2.f ? ImVec4(0.3f, 0.9f, 0.5f, 1.f)
+                             : rr >= 1.f ? ImVec4(0.9f, 0.8f, 0.3f, 1.f)
+                             : ImVec4(0.9f, 0.3f, 0.3f, 1.f);
+                ImGui::TextColored(rrCol, "R:R  %.2f", rr);
+            }
+        }
 
         // Draw the idle state (when no strategy is being created/edited)
         void DrawIdleState()
@@ -365,16 +419,16 @@ namespace stnks
                             }
                             else if (strategy_.entryPrice > 0.f)
                             {
-                                float offset = strategy_.entryPrice * 0.05f;
+                                float offset = ComputeDefaultOffset(strategy_.entryPrice);
                                 if (strategy_.direction == StrategyDirection::Long)
                                 {
                                     strategy_.takeProfit = strategy_.entryPrice + offset;
-                                    strategy_.stopLoss   = strategy_.entryPrice - offset * 0.6f;
+                                    strategy_.stopLoss   = strategy_.entryPrice - offset;
                                 }
                                 else
                                 {
                                     strategy_.takeProfit = strategy_.entryPrice - offset;
-                                    strategy_.stopLoss   = strategy_.entryPrice + offset * 0.6f;
+                                    strategy_.stopLoss   = strategy_.entryPrice + offset;
                                 }
                             }
                         }
@@ -388,14 +442,35 @@ namespace stnks
             }
             else
             {
-                // Edit mode: show type badge
+                // Edit mode: prominent colored header bar
+                ImVec2 avail = ImGui::GetContentRegionAvail();
+                ImVec2 cursor = ImGui::GetCursorScreenPos();
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+
+                // Orange/amber header bar for edit mode
+                ImU32 headerCol = IM_COL32(200, 140, 40, 255);
+                ImU32 headerBg  = IM_COL32(60, 40, 15, 255);
+                float barH = 28.f;
+                dl->AddRectFilled(ImVec2(cursor.x - 4, cursor.y),
+                                  ImVec2(cursor.x + avail.x + 4, cursor.y + barH),
+                                  headerBg, 4.f);
+                dl->AddRect(ImVec2(cursor.x - 4, cursor.y),
+                            ImVec2(cursor.x + avail.x + 4, cursor.y + barH),
+                            headerCol, 4.f, 0, 1.5f);
+
+                // Edit icon + text
                 ImVec4 typeCol = strategy_.IsTPSL() ? ImVec4(0.4f, 0.7f, 1.f, 1.f)
                                : strategy_.IsPosition() ? ImVec4(0.4f, 1.f, 0.6f, 1.f)
                                : ImVec4(0.9f, 0.6f, 1.f, 1.f);
+
+                ImGui::SetCursorScreenPos(ImVec2(cursor.x + 6, cursor.y + 5));
+                ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "EDITING");
+                ImGui::SameLine();
                 ImGui::TextColored(typeCol, "%s", StrategyTypeToString(strategy_.type));
                 ImGui::SameLine();
-                ImGui::TextDisabled("| Editing #%lld", (long long)strategy_.id);
-                ImGui::Spacing();
+                ImGui::TextDisabled("#%lld  %s", (long long)strategy_.id, strategy_.symbol.c_str());
+
+                ImGui::SetCursorScreenPos(ImVec2(cursor.x, cursor.y + barH + 6));
                 ImGui::Separator();
                 ImGui::Spacing();
             }
@@ -435,8 +510,9 @@ namespace stnks
 #endif
                         char dateBuf[32];
                         strftime(dateBuf, sizeof(dateBuf), "%b %d, %Y", &t);
+                        { char pb[32]; FmtPrice(pb, sizeof(pb), c.close, strategy_.symbol);
                         ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.f, 1.f),
-                            "%s @ %.2f", dateBuf, c.close);
+                            "%s @ %s", dateBuf, pb); }
                     }
                 }
                 ImGui::Spacing();
@@ -490,43 +566,46 @@ namespace stnks
                 ImGui::InputFloat("##wizEntry", &strategy_.entryPrice, 0.f, 0.f, "%.4f");
             }
 
-            // === TP/SL (TPSL type) ===
+            // === TP/SL (TPSL type — always shown; Position — optional collapsible) ===
             if (strategy_.type == StrategyType::TPSL)
             {
                 ImGui::Spacing();
-
-                // Take Profit
-                ImGui::TextDisabled("Take Profit");
-                ImGui::SetNextItemWidth(-50.f);
-                ImGui::InputFloat("##wizTP", &strategy_.takeProfit, 0.f, 0.f, "%.4f");
-                if (strategy_.takeProfit > 0.f && strategy_.entryPrice > 0.f)
+                DrawTPSLFields();
+            }
+            else if (strategy_.type == StrategyType::Position)
+            {
+                ImGui::Spacing();
+                bool hasTargets = strategy_.takeProfit > 0.f || strategy_.stopLoss > 0.f;
+                if (!hasTargets)
                 {
-                    float pct = strategy_.TPPercent();
+                    // Show a button to optionally add TP/SL to the position
+                    if (ImGui::SmallButton("+ Add TP/SL targets"))
+                    {
+                        float offset = strategy_.entryPrice > 0.f ? ComputeDefaultOffset(strategy_.entryPrice) : 0.f;
+                        if (strategy_.direction == StrategyDirection::Long)
+                        {
+                            strategy_.takeProfit = strategy_.entryPrice + offset;
+                            strategy_.stopLoss   = strategy_.entryPrice - offset;
+                        }
+                        else
+                        {
+                            strategy_.takeProfit = strategy_.entryPrice - offset;
+                            strategy_.stopLoss   = strategy_.entryPrice + offset;
+                        }
+                    }
                     ImGui::SameLine();
-                    ImVec4 col = pct >= 0.f ? ImVec4(0.3f, 0.9f, 0.5f, 1.f) : ImVec4(0.9f, 0.3f, 0.3f, 1.f);
-                    ImGui::TextColored(col, "%+.1f%%", pct);
+                    ImGui::TextDisabled("(optional)");
                 }
-
-                // Stop Loss
-                ImGui::TextDisabled("Stop Loss");
-                ImGui::SetNextItemWidth(-50.f);
-                ImGui::InputFloat("##wizSL", &strategy_.stopLoss, 0.f, 0.f, "%.4f");
-                if (strategy_.stopLoss > 0.f && strategy_.entryPrice > 0.f)
+                else
                 {
-                    float pct = strategy_.SLPercent();
-                    ImGui::SameLine();
-                    ImVec4 col = pct >= 0.f ? ImVec4(0.3f, 0.9f, 0.5f, 1.f) : ImVec4(0.9f, 0.3f, 0.3f, 1.f);
-                    ImGui::TextColored(col, "%+.1f%%", pct);
-                }
-
-                // R:R
-                float rr = strategy_.RiskReward();
-                if (rr > 0.f)
-                {
-                    ImVec4 rrCol = rr >= 2.f ? ImVec4(0.3f, 0.9f, 0.5f, 1.f)
-                                 : rr >= 1.f ? ImVec4(0.9f, 0.8f, 0.3f, 1.f)
-                                 : ImVec4(0.9f, 0.3f, 0.3f, 1.f);
-                    ImGui::TextColored(rrCol, "R:R  %.2f", rr);
+                    ImGui::TextDisabled("TP/SL Targets");
+                    ImGui::SameLine(ImGui::GetContentRegionAvail().x - 40.f);
+                    if (ImGui::SmallButton("Clear"))
+                    {
+                        strategy_.takeProfit = 0.f;
+                        strategy_.stopLoss   = 0.f;
+                    }
+                    DrawTPSLFields();
                 }
             }
 
@@ -535,6 +614,16 @@ namespace stnks
             ImGui::TextDisabled("Quantity");
             ImGui::SetNextItemWidth(-1.f);
             ImGui::InputFloat("##wizQty", &strategy_.quantity, 1.f, 10.f, "%.1f");
+
+            // === Fees ===
+            ImGui::Spacing();
+            ImGui::TextDisabled("Fees");
+            ImGui::SetNextItemWidth(-1.f);
+            ImGui::InputFloat("##wizEFee", &strategy_.entryFee, 0.f, 0.f, "%.2f");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Entry fee (total commission)");
+            ImGui::SetNextItemWidth(-1.f);
+            ImGui::InputFloat("##wizXFee", &strategy_.exitFee, 0.f, 0.f, "%.2f");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Exit fee (total commission)");
 
             // === Notes ===
             ImGui::TextDisabled("Notes");
@@ -575,9 +664,10 @@ namespace stnks
                         {
                             strategy_.entryDate = (*candles)[selectedCandle_].timestamp;
                         }
-                        else if (candles && !candles->empty())
+                        else
                         {
-                            strategy_.entryDate = candles->back().timestamp;
+                            // Live/now mode: entry date is the current moment
+                            strategy_.entryDate = std::time(nullptr);
                         }
                     }
 

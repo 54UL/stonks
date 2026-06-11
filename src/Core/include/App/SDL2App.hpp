@@ -15,6 +15,8 @@
 #include <SDL.h>
 #include <SDL_opengl.h>
 
+struct ImGuiViewport;
+
 namespace stnks
 {
     class SDL2App : public App
@@ -37,6 +39,9 @@ namespace stnks
         std::vector<std::shared_ptr<ExecutionPipeline>> executionPipelines_;
 
         const char * windowTitle_;
+        WindowMode windowMode_ = WindowMode::Windowed;
+        bool       vsync_      = false;
+        int        fpsTarget_  = 0; // 0 = unlimited
 
     public:
          SDL2App(const char * windowTitle);
@@ -52,6 +57,15 @@ namespace stnks
         glm::ivec2 GetMainWindowSize() override;
         void AddExecutionPipeline(std::shared_ptr<ExecutionPipeline> engine) override;
 
+        // Display settings
+        void SetWindowMode(WindowMode mode) override;
+        WindowMode GetWindowMode() const override;
+        void SetVSync(bool enabled) override;
+        bool GetVSync() const override;
+        void SetResolution(int w, int h) override;
+        void SetFPSTarget(int fps) override;
+        int  GetFPSTarget() const override;
+
         SDL_Window* GetMainWindow();
         SDL_GLContext* GetGLContext();
         void Dispose();
@@ -65,6 +79,10 @@ namespace stnks
         void RenderingInit();
         void PrepareFrame();
         void PresentFrame();
+
+        // Viewport hook: gives undocked panels OS window decorations
+        static void ViewportCreateWindowHook(ImGuiViewport* vp);
+        static void (*s_origCreateWindow_)(ImGuiViewport*);
     };
 }
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Charts/IStrategyRenderer.hpp>
+#include <Market/MarketHours.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -28,9 +29,13 @@ namespace stnks
 
             float yEntry = vp.PriceToY(strategy.entryPrice);
             float left   = ResolveEntryX(vp, candles, strategy);
-            float right  = vp.chartOrigin.x + vp.chartSize.x;
+            float right  = ResolveRightX(vp, candles, strategy);
 
             bool active = strategy.IsActive();
+            bool hasTP  = strategy.takeProfit > 0.f;
+            bool hasSL  = strategy.stopLoss > 0.f;
+            bool tpHit  = strategy.status == StrategyStatus::TPHit;
+            bool slHit  = strategy.status == StrategyStatus::SLHit;
 
             // --- Determine P&L coloring ---
             float pnlPct = strategy.UnrealizedPnLPercent(currentPrice_);
@@ -43,6 +48,32 @@ namespace stnks
             ImU32 pnlZoneBorder = inProfit
                 ? IM_COL32(38, 166, 91, 60)
                 : IM_COL32(214, 48, 49, 60);
+
+            // --- TP/SL zones (when position has targets set) ---
+            if (hasTP)
+            {
+                float yTP = vp.PriceToY(strategy.takeProfit);
+                ImU32 tpFill = active ? IM_COL32(38, 166, 91, 25)
+                                      : (tpHit ? IM_COL32(38, 166, 91, 15) : IM_COL32(100, 100, 100, 10));
+                ImU32 tpBord = active ? IM_COL32(38, 166, 91, 120) : IM_COL32(38, 166, 91, 50);
+
+                float tpTop    = std::min(yEntry, yTP);
+                float tpBottom = std::max(yEntry, yTP);
+                drawList->AddRectFilled(ImVec2(left, tpTop), ImVec2(right, tpBottom), tpFill);
+                DrawDashedLine(drawList, ImVec2(left, yTP), ImVec2(right, yTP), tpBord);
+            }
+            if (hasSL)
+            {
+                float ySL = vp.PriceToY(strategy.stopLoss);
+                ImU32 slFill = active ? IM_COL32(214, 48, 49, 25)
+                                      : (slHit ? IM_COL32(214, 48, 49, 15) : IM_COL32(100, 100, 100, 10));
+                ImU32 slBord = active ? IM_COL32(214, 48, 49, 120) : IM_COL32(214, 48, 49, 50);
+
+                float slTop    = std::min(yEntry, ySL);
+                float slBottom = std::max(yEntry, ySL);
+                drawList->AddRectFilled(ImVec2(left, slTop), ImVec2(right, slBottom), slFill);
+                DrawDashedLine(drawList, ImVec2(left, ySL), ImVec2(right, ySL), slBord);
+            }
 
             // --- P&L shaded zone (entry to current price) ---
             if (currentPrice_ > 0.f && active)
@@ -68,11 +99,12 @@ namespace stnks
                 float labelX = right - 200.f;
 
                 // Entry + quantity label
-                char entryBuf[64];
+                char entryBuf[64]; char epb[32];
+                FmtPrice(epb, sizeof(epb), strategy.entryPrice, strategy.symbol);
                 if (strategy.quantity > 0.f)
-                    snprintf(entryBuf, sizeof(entryBuf), "POS %.2f x%.0f", strategy.entryPrice, strategy.quantity);
+                    snprintf(entryBuf, sizeof(entryBuf), "POS %s x%.0f", epb, strategy.quantity);
                 else
-                    snprintf(entryBuf, sizeof(entryBuf), "POS %.2f", strategy.entryPrice);
+                    snprintf(entryBuf, sizeof(entryBuf), "POS %s", epb);
                 DrawLabel(drawList, ImVec2(labelX, yEntry - 16.f), entryCol, "%s", entryBuf);
 
                 // Direction
@@ -80,6 +112,26 @@ namespace stnks
                     ? IM_COL32(38, 166, 91, 220) : IM_COL32(214, 48, 49, 220);
                 DrawLabel(drawList, ImVec2(left + 4.f, yEntry + 2.f),
                           dirCol, "%s", DirectionToString(strategy.direction));
+
+                // TP/SL labels (when set)
+                if (hasTP && !editing)
+                {
+                    float yTP = vp.PriceToY(strategy.takeProfit);
+                    ImU32 tpCol = active ? IM_COL32(38, 166, 91, 200) : IM_COL32(38, 166, 91, 80);
+                    char tpBuf[48]; char tpPb[32];
+                    FmtPrice(tpPb, sizeof(tpPb), strategy.takeProfit, strategy.symbol);
+                    snprintf(tpBuf, sizeof(tpBuf), "TP %s", tpPb);
+                    DrawLabel(drawList, ImVec2(labelX, yTP + (yTP < yEntry ? -16.f : 2.f)), tpCol, "%s", tpBuf);
+                }
+                if (hasSL && !editing)
+                {
+                    float ySL = vp.PriceToY(strategy.stopLoss);
+                    ImU32 slCol = active ? IM_COL32(214, 48, 49, 200) : IM_COL32(214, 48, 49, 80);
+                    char slBuf[48]; char slPb[32];
+                    FmtPrice(slPb, sizeof(slPb), strategy.stopLoss, strategy.symbol);
+                    snprintf(slBuf, sizeof(slBuf), "SL %s", slPb);
+                    DrawLabel(drawList, ImVec2(labelX, ySL + (ySL > yEntry ? 2.f : -16.f)), slCol, "%s", slBuf);
+                }
 
                 // P&L badge
                 if (currentPrice_ > 0.f && active)
@@ -91,9 +143,13 @@ namespace stnks
 
                     char pnlBuf[64];
                     if (strategy.quantity > 0.f)
-                        snprintf(pnlBuf, sizeof(pnlBuf), "%+.2f (%+.1f%%)", pnl, pnlPct);
+                    {
+                        auto c = GetCurrency(strategy.symbol);
+                        snprintf(pnlBuf, sizeof(pnlBuf), "%c%s%.2f (%+.2f%%)",
+                            pnl >= 0 ? '+' : '-', c.symbol, std::fabs(pnl), pnlPct);
+                    }
                     else
-                        snprintf(pnlBuf, sizeof(pnlBuf), "%+.1f%%", pnlPct);
+                        snprintf(pnlBuf, sizeof(pnlBuf), "%+.2f%%", pnlPct);
 
                     DrawLabel(drawList, ImVec2(labelX, yEntry + 2.f), pnlCol, "%s", pnlBuf);
                 }
@@ -118,7 +174,9 @@ namespace stnks
                 if (!active)
                 {
                     const char* badge = StatusToString(strategy.status);
-                    ImU32 badgeCol = IM_COL32(150, 150, 150, 255);
+                    ImU32 badgeCol = tpHit  ? IM_COL32(38, 166, 91, 255)
+                                  : slHit  ? IM_COL32(214, 48, 49, 255)
+                                           : IM_COL32(150, 150, 150, 255);
                     ImVec2 badgePos(left + 80.f, yEntry + 2.f);
                     ImVec2 textSize = ImGui::CalcTextSize(badge);
                     drawList->AddRectFilled(
@@ -126,6 +184,34 @@ namespace stnks
                         ImVec2(badgePos.x + textSize.x + 4.f, badgePos.y + textSize.y + 2.f),
                         kLabelBgColor, 3.f);
                     drawList->AddText(badgePos, badgeCol, badge);
+
+                    // Triggered date + exit price
+                    if (strategy.triggeredAt > 0)
+                    {
+                        time_t tt = static_cast<time_t>(strategy.triggeredAt);
+                        struct tm t;
+#ifdef _WIN32
+                        localtime_s(&t, &tt);
+#else
+                        localtime_r(&tt, &t);
+#endif
+                        char trigBuf[64];
+                        strftime(trigBuf, sizeof(trigBuf), "%b %d %H:%M", &t);
+                        char exitBuf[96];
+                        if (strategy.exitPrice > 0.f)
+                        {
+                            char xpb[32]; FmtPrice(xpb, sizeof(xpb), strategy.exitPrice, strategy.symbol);
+                            snprintf(exitBuf, sizeof(exitBuf), "%s @ %s (%+.2f%%)",
+                                     trigBuf, xpb, strategy.closedPnlPct);
+                        }
+                        else
+                            snprintf(exitBuf, sizeof(exitBuf), "%s", trigBuf);
+
+                        float exitLabelX = right - 4.f;
+                        ImVec2 exitSz = ImGui::CalcTextSize(exitBuf);
+                        exitLabelX -= exitSz.x;
+                        DrawLabel(drawList, ImVec2(exitLabelX, yEntry + 2.f), badgeCol, "%s", exitBuf);
+                    }
                 }
             }
         }
@@ -139,15 +225,81 @@ namespace stnks
             float yEntry = vp.PriceToY(strategy.entryPrice);
             float right  = vp.chartOrigin.x + vp.chartSize.x;
 
+            bool hasTP = strategy.takeProfit > 0.f;
+            bool hasSL = strategy.stopLoss > 0.f;
+
+            // Reset hover target each frame (drag target persists while dragging)
+            if (!isDragging_)
+                activeTarget_ = DragTarget::None;
+
             // --- Entry drag handle ---
-            bool hovered = DrawGizmoHandle(drawList, vp, yEntry, kEntryColor, kEntryHoverColor,
-                                            strategy.entryPrice, "Entry");
+            bool entryHovered = DrawGizmoHandle(drawList, vp, yEntry, kEntryColor, kEntryHoverColor,
+                                                strategy.entryPrice, "Entry");
+            if (entryHovered && !isDragging_)
+                activeTarget_ = DragTarget::Entry;
+
+            // --- TP drag handle (when set) ---
+            bool tpHovered = false;
+            if (hasTP)
+            {
+                float yTP = vp.PriceToY(strategy.takeProfit);
+                tpHovered = DrawGizmoHandle(drawList, vp, yTP,
+                    IM_COL32(38, 166, 91, 180), IM_COL32(50, 200, 110, 240),
+                    strategy.takeProfit, "TP");
+                if (tpHovered && !isDragging_)
+                    activeTarget_ = DragTarget::TP;
+            }
+
+            // --- SL drag handle (when set) ---
+            bool slHovered = false;
+            if (hasSL)
+            {
+                float ySL = vp.PriceToY(strategy.stopLoss);
+                slHovered = DrawGizmoHandle(drawList, vp, ySL,
+                    IM_COL32(214, 48, 49, 180), IM_COL32(240, 70, 70, 240),
+                    strategy.stopLoss, "SL");
+                if (slHovered && !isDragging_)
+                    activeTarget_ = DragTarget::SL;
+            }
+
+            bool anyHovered = entryHovered || tpHovered || slHovered;
 
             // --- Handle drag ---
             if (isDragging_)
             {
                 float newPrice = vp.YToPrice(io.MousePos.y);
-                strategy.entryPrice = std::max(0.01f, newPrice);
+                newPrice = std::max(0.01f, newPrice);
+
+                bool isLong = strategy.direction == StrategyDirection::Long;
+
+                switch (activeTarget_)
+                {
+                case DragTarget::Entry:
+                {
+                    float tpOff = strategy.takeProfit - strategy.entryPrice;
+                    float slOff = strategy.stopLoss - strategy.entryPrice;
+                    strategy.entryPrice = newPrice;
+                    if (hasTP) strategy.takeProfit = newPrice + tpOff;
+                    if (hasSL) strategy.stopLoss   = newPrice + slOff;
+                    break;
+                }
+                case DragTarget::TP:
+                    if (isLong)
+                        newPrice = std::max(newPrice, strategy.entryPrice + 0.01f);
+                    else
+                        newPrice = std::min(newPrice, strategy.entryPrice - 0.01f);
+                    strategy.takeProfit = newPrice;
+                    break;
+                case DragTarget::SL:
+                    if (isLong)
+                        newPrice = std::min(newPrice, strategy.entryPrice - 0.01f);
+                    else
+                        newPrice = std::max(newPrice, strategy.entryPrice + 0.01f);
+                    strategy.stopLoss = newPrice;
+                    break;
+                default: break;
+                }
+
                 result.modified = true;
 
                 drawList->AddLine(
@@ -156,9 +308,12 @@ namespace stnks
                     IM_COL32(255, 255, 255, 60), 1.0f);
 
                 if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+                {
                     isDragging_ = false;
+                    activeTarget_ = DragTarget::None;
+                }
             }
-            else if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            else if (anyHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
             {
                 isDragging_ = true;
             }
@@ -170,10 +325,22 @@ namespace stnks
                 panelY = std::max(panelY, vp.chartOrigin.y + 4.f);
 
                 char infoBuf[128];
-                snprintf(infoBuf, sizeof(infoBuf),
-                    "%s Position  |  Entry %.2f  |  Qty %.0f",
-                    DirectionToString(strategy.direction),
-                    strategy.entryPrice, strategy.quantity);
+                {
+                    char e[32], t[32], sl[32];
+                    FmtPrice(e, sizeof(e), strategy.entryPrice, strategy.symbol);
+                    if (hasTP && hasSL)
+                    {
+                        FmtPrice(t, sizeof(t), strategy.takeProfit, strategy.symbol);
+                        FmtPrice(sl, sizeof(sl), strategy.stopLoss, strategy.symbol);
+                        snprintf(infoBuf, sizeof(infoBuf),
+                            "%s Position  |  Entry %s  |  TP %s  |  SL %s  |  Qty %.0f",
+                            DirectionToString(strategy.direction), e, t, sl, strategy.quantity);
+                    }
+                    else
+                        snprintf(infoBuf, sizeof(infoBuf),
+                            "%s Position  |  Entry %s  |  Qty %.0f",
+                            DirectionToString(strategy.direction), e, strategy.quantity);
+                }
 
                 ImVec2 textSz = ImGui::CalcTextSize(infoBuf);
                 drawList->AddRectFilled(
@@ -187,26 +354,46 @@ namespace stnks
                 drawList->AddText(ImVec2(panelX, panelY), IM_COL32(200, 200, 220, 255), infoBuf);
             }
 
-            // --- Confirm / Cancel buttons ---
+            // --- Action button bar (Confirm / Cancel / Delete) ---
             {
-                float btnY = yEntry + 28.f;
-                btnY = std::min(btnY, vp.chartOrigin.y + vp.chartSize.y - 24.f);
-                float btnX = right - 140.f;
+                float lowestY = yEntry + 28.f;
+                if (hasTP) lowestY = std::max(lowestY, vp.PriceToY(strategy.takeProfit) + 8.f);
+                if (hasSL) lowestY = std::max(lowestY, vp.PriceToY(strategy.stopLoss) + 8.f);
+                float btnY = std::min(lowestY, vp.chartOrigin.y + vp.chartSize.y - 28.f);
 
-                result.confirmed = DrawButton(drawList, ImVec2(btnX, btnY),
+                // Bar background
+                float barX = vp.chartOrigin.x + 4.f;
+                float barW = 216.f;
+                float barH = 26.f;
+                drawList->AddRectFilled(
+                    ImVec2(barX - 4.f, btnY - 2.f),
+                    ImVec2(barX + barW + 4.f, btnY + barH + 2.f),
+                    IM_COL32(16, 18, 26, 230), 6.f);
+                drawList->AddRect(
+                    ImVec2(barX - 4.f, btnY - 2.f),
+                    ImVec2(barX + barW + 4.f, btnY + barH + 2.f),
+                    IM_COL32(60, 64, 80, 140), 6.f);
+
+                float innerY = btnY + 2.f;
+                result.confirmed = DrawButton(drawList, ImVec2(barX, innerY),
                     "Confirm", IM_COL32(38, 166, 91, 200), IM_COL32(38, 166, 91, 255));
 
-                result.cancelled = DrawButton(drawList, ImVec2(btnX + 72.f, btnY),
-                    "Cancel", IM_COL32(180, 60, 60, 200), IM_COL32(214, 48, 49, 255));
+                result.cancelled = DrawButton(drawList, ImVec2(barX + 76.f, innerY),
+                    "Cancel", IM_COL32(140, 140, 160, 200), IM_COL32(180, 180, 200, 255));
+
+                result.deleted = DrawButton(drawList, ImVec2(barX + 140.f, innerY),
+                    "Delete", IM_COL32(180, 40, 40, 200), IM_COL32(230, 60, 60, 255));
             }
 
-            if (hovered || isDragging_)
+            if (anyHovered || isDragging_)
                 ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
 
             return result;
         }
 
     private:
+        enum class DragTarget { None, Entry, TP, SL };
+        DragTarget activeTarget_ = DragTarget::None;
         float currentPrice_ = 0.f;
         bool  isDragging_   = false;
 
@@ -221,7 +408,7 @@ namespace stnks
                              float y, ImU32 color, ImU32 hoverColor,
                              float price, const char* prefix)
         {
-            float x = vp.chartOrigin.x + vp.chartSize.x - kHandleW - 10.f;
+            float x = vp.chartOrigin.x + 10.f;
             float hy = y - kHandleH * 0.5f;
 
             ImVec2 min(x, hy);
@@ -254,8 +441,9 @@ namespace stnks
                 ImVec2(x + 18.f, hy + (kHandleH - textSz.y) * 0.5f),
                 col, buf);
 
-            // Connecting line
-            drawList->AddLine(ImVec2(x, y), ImVec2(vp.chartOrigin.x, y),
+            // Connecting line to chart right edge
+            float right = vp.chartOrigin.x + vp.chartSize.x;
+            drawList->AddLine(ImVec2(x + kHandleW, y), ImVec2(right, y),
                 (hovered || active) ? col : IM_COL32(col & 0xFF, (col >> 8) & 0xFF, (col >> 16) & 0xFF, 40),
                 (hovered || active) ? 1.5f : 0.5f);
 

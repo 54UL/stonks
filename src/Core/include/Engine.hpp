@@ -1,19 +1,22 @@
 #pragma once
 
-#include <App/App.hpp>
 #include <Paths.hpp>
 #include <App/EnginePipeline.hpp>
-#include <Graphics/Rendering.hpp>
-#include <Graphics/Rendering/Entities/Camera.hpp>
-#include <Input/PlayerInput.hpp>
 #include <Dependencies/Globals.hpp>
 #include <Threading/ThreadRegistry.hpp>
 #include <ECS/Registry.hpp>
 
+#ifndef STNKS_HEADLESS
+#include <App/App.hpp>
+#include <Graphics/Rendering.hpp>
+#include <Graphics/Rendering/Entities/Camera.hpp>
+#include <Input/PlayerInput.hpp>
+#include <imgui.h>
+#endif
+
 #include <memory>
 #include <vector>
 #include <array>
-#include <imgui.h>
 #include <spdlog/spdlog.h>
 
 namespace stnks
@@ -50,18 +53,23 @@ namespace stnks
     class Engine final : public EnginePipeline
     {
     public:
+#ifndef STNKS_HEADLESS
         std::shared_ptr<App>            appInstance_;
-        std::shared_ptr<Globals>        globals_;
         std::shared_ptr<Camera>         camera_;
-
         Rendering                       renderEngine_;
         PlayerInput                     inputSystem_;
+#endif
+        std::shared_ptr<Globals>        globals_;
         ThreadDebugInfo                 threadDebugInfo_;
         ThreadRegistry                  threadRegistry_;
         ecs::Registry                   registry_;
 
     public:
+#ifndef STNKS_HEADLESS
         explicit Engine(std::shared_ptr<App> appInstance);
+#else
+        Engine();
+#endif
         ~Engine() override;
 
         void LoadGlobals(const std::string &fileName);
@@ -73,6 +81,8 @@ namespace stnks
         void Update() override;
         void PrepareFrame() override;
         void PresentFrame() override;
+#ifndef STNKS_HEADLESS
         PlayerInput* GetInputSystem() override;
+#endif
     };
 } // namespace stnks

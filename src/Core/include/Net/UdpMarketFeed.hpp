@@ -107,7 +107,8 @@ namespace stnks
     class MarketFeedServer
     {
     public:
-        explicit MarketFeedServer(const NetFeedConfig& config = {});
+        MarketFeedServer();
+        explicit MarketFeedServer(const NetFeedConfig& config);
         ~MarketFeedServer();
 
         void Start();
@@ -141,7 +142,8 @@ namespace stnks
     public:
         using TickCallback = std::function<void(const MarketTick&)>;
 
-        explicit MarketFeedClient(const NetFeedConfig& config = {});
+        MarketFeedClient();
+        explicit MarketFeedClient(const NetFeedConfig& config);
         ~MarketFeedClient();
 
         // Connect to server, start recv thread
@@ -164,6 +166,9 @@ namespace stnks
         // Time since last successful heartbeat (seconds)
         float GetTimeSinceLastHeartbeat() const;
 
+        // Reconnection state
+        int GetReconnectAttempts() const { return reconnectAttempts_; }
+
     private:
         void NetworkLoop(std::string hostAddr, uint16_t port);
         void HandlePacket(ENetPacket* packet);
@@ -176,7 +181,8 @@ namespace stnks
         std::atomic<NetState> state_{NetState::Offline};
         std::atomic<float>  latencyMs_{-1.f};
 
-        std::chrono::steady_clock::time_point lastHeartbeat_;
+        std::chrono::steady_clock::time_point lastHeartbeat_;      // Last received echo
+        std::chrono::steady_clock::time_point lastHeartbeatSent_;  // Last sent heartbeat
         std::chrono::steady_clock::time_point connectStart_;
 
         mutable std::mutex                          tickMutex_;
@@ -186,6 +192,16 @@ namespace stnks
         TickCallback        callback_;
 
         static constexpr double kConnectTimeoutSec = 5.0;
+        static constexpr double kReconnectDelaySec = 5.0;
+        static constexpr double kHeartbeatTimeoutSec = 10.0; // Dead if no heartbeat echo for this long
+
+        // Connection params stored for reconnect
+        std::string savedHost_;
+        uint16_t    savedPort_ = 0;
+        int         reconnectAttempts_ = 0;
+
+        void AttemptReconnect();
+        void CleanupConnection();
     };
 
 } // namespace stnks

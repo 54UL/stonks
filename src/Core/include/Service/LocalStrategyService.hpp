@@ -24,8 +24,9 @@ namespace stnks
             bool startMonitoring = true;  // Auto-start the server loop
         };
 
+        explicit LocalStrategyService(HttpClient& http, ThreadRegistry& threads);
         explicit LocalStrategyService(HttpClient& http, ThreadRegistry& threads,
-                                       const Config& config = {});
+                                       const Config& config);
         ~LocalStrategyService() override;
 
         // Optionally register actions on the embedded server

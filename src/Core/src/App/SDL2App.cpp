@@ -1,8 +1,13 @@
 #include <App/SDL2App.hpp>
 #include <Engine.hpp>
+#include <Dependencies/Globals.hpp>
+#include <GlobalKeys.hpp>
+#include <Dependency.hpp>
 #include <spdlog/spdlog.h>
 #include <iostream>
 #include <functional>
+#include <cstdlib>
+#include <cstring>
 
 #include <imgui.h>
 #include <backends/imgui_impl_sdl2.h>
@@ -10,6 +15,23 @@
 
 namespace stnks
 {
+    void (*SDL2App::s_origCreateWindow_)(ImGuiViewport*) = nullptr;
+
+    void SDL2App::ViewportCreateWindowHook(ImGuiViewport* vp)
+    {
+        // Strip NoDecoration so the backend creates a bordered window
+        vp->Flags &= ~ImGuiViewportFlags_NoDecoration;
+
+        // Call the original SDL2 backend CreateWindow
+        if (s_origCreateWindow_)
+            s_origCreateWindow_(vp);
+
+        // Ensure the SDL window has OS decorations (title bar + controls)
+        SDL_Window* sdlWin = static_cast<SDL_Window*>(vp->PlatformHandle);
+        if (sdlWin)
+            SDL_SetWindowBordered(sdlWin, SDL_TRUE);
+    }
+
     SDL2App::SDL2App(const char * windowTitle) : runningStatus_(true), windowTitle_(windowTitle), initialized_(false)
     {
         currentAppTime_ =0;
@@ -29,9 +51,22 @@ namespace stnks
             return 0;
         }
 
-        // Create SDL window and OpenGL context
-        // todo: get the size from a config or idk lol...
-        window_ = SDL_CreateWindow(windowTitle_, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1200, 800, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE /*| SDL_RENDERER_PRESENTVSYNC*/);
+        // Create SDL window — read persisted size from Globals if available
+        int initW = 1200, initH = 800;
+        {
+            auto globals = GetDependency(Globals);
+            if (globals)
+            {
+                std::string rw = globals->Get(gk::prefix::APP, gk::key::RESOLUTION_W);
+                std::string rh = globals->Get(gk::prefix::APP, gk::key::RESOLUTION_H);
+                if (!rw.empty() && !rh.empty())
+                {
+                    initW = std::max(640, std::atoi(rw.c_str()));
+                    initH = std::max(480, std::atoi(rh.c_str()));
+                }
+            }
+        }
+        window_ = SDL_CreateWindow(windowTitle_, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, initW, initH, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
         if (!window_)
         {
             // Handle window creation error
@@ -90,6 +125,27 @@ namespace stnks
         currentEngine_ = GetDependency(Engine);
         currentEngine_->Init();
 
+        // Apply persisted display settings from Globals
+        {
+            auto globals = GetDependency(Globals);
+            if (globals)
+            {
+                std::string wm = globals->Get(gk::prefix::APP, gk::key::WINDOW_MODE);
+                if (!wm.empty()) SetWindowMode(static_cast<WindowMode>(std::atoi(wm.c_str())));
+
+                std::string vs = globals->Get(gk::prefix::APP, gk::key::VSYNC);
+                if (!vs.empty()) SetVSync(vs == "1");
+
+                std::string rw = globals->Get(gk::prefix::APP, gk::key::RESOLUTION_W);
+                std::string rh = globals->Get(gk::prefix::APP, gk::key::RESOLUTION_H);
+                if (!rw.empty() && !rh.empty())
+                    SetResolution(std::atoi(rw.c_str()), std::atoi(rh.c_str()));
+
+                std::string ft = globals->Get(gk::prefix::APP, gk::key::FPS_TARGET);
+                if (!ft.empty()) fpsTarget_ = std::atoi(ft.c_str());
+            }
+        }
+
         // From here you can start using IMGUI + GL
         for(auto execution : executionPipelines_)
         {
@@ -112,8 +168,19 @@ namespace stnks
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
         io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
 
+        // Undocked panels get OS window decorations (title bar, min/max/close)
+        io.ConfigViewportsNoDecoration = false;
+
         ImGui_ImplSDL2_InitForOpenGL(window_, glContext_);
         ImGui_ImplOpenGL3_Init("#version 330 core");
+
+        // Hook viewport window creation so undocked panels get OS window decorations
+        // (title bar, minimize/maximize/close) instead of being borderless.
+        {
+            ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+            s_origCreateWindow_ = pio.Platform_CreateWindow;
+            pio.Platform_CreateWindow = &SDL2App::ViewportCreateWindowHook;
+        }
 
         SDL_GetWindowSize(window_, &mainWindowSize_.x, &mainWindowSize_.y);
     }
@@ -125,10 +192,13 @@ namespace stnks
         ImGui_ImplSDL2_NewFrame(window_);
         ImGui::NewFrame();
 
+        // Keep window size in sync (covers resize events we might miss)
+        SDL_GetWindowSize(window_, &mainWindowSize_.x, &mainWindowSize_.y);
+
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glClearColor(0.0f,1.0f, 0.0f, 1.0f); // BACKGROUND COLOR...
-		glEnable(GL_DEPTH_TEST);
-        glViewport(0,0, mainWindowSize_.x, mainWindowSize_.y);
+        glClearColor(0.055f, 0.055f, 0.07f, 1.0f);
+        glEnable(GL_DEPTH_TEST);
+        glViewport(0, 0, mainWindowSize_.x, mainWindowSize_.y);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     }
 
@@ -173,13 +243,22 @@ namespace stnks
             currentTicks = SDL_GetTicks();
             currentDeltaTime_= (currentTicks - prevTicks) / 1000.0f;
             currentAppTime_ += currentDeltaTime_;
-            
+
             AppInput();
             currentEngine_->Update();
             PrepareFrame();
             PresentFrame();
-            
+
             prevTicks = currentTicks;
+
+            // FPS limiter (when vsync is off and target is set)
+            if (fpsTarget_ > 0 && !vsync_)
+            {
+                uint32_t frameMs = SDL_GetTicks() - currentTicks;
+                uint32_t targetMs = 1000u / (uint32_t)fpsTarget_;
+                if (frameMs < targetMs)
+                    SDL_Delay(targetMs - frameMs);
+            }
         }
         return 0;
     }
@@ -254,6 +333,15 @@ namespace stnks
             case SDL_QUIT:
                 SetRunningStatus(false);
                 return;
+            case SDL_WINDOWEVENT:
+                if (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED ||
+                    event.window.event == SDL_WINDOWEVENT_RESIZED)
+                {
+                    mainWindowSize_.x = event.window.data1;
+                    mainWindowSize_.y = event.window.data2;
+                    glViewport(0, 0, mainWindowSize_.x, mainWindowSize_.y);
+                }
+                break;
             case SDL_KEYDOWN:
                 input->SetKey(event.key.keysym.sym, true);
                 break;
@@ -285,5 +373,70 @@ namespace stnks
     SDL_GLContext *SDL2App::GetGLContext()
     {
         return &this->glContext_;
+    }
+
+    // ── Display settings ─────────────────────────────────────────────────────
+
+    void SDL2App::SetWindowMode(WindowMode mode)
+    {
+        windowMode_ = mode;
+        if (!window_) return;
+
+        switch (mode)
+        {
+        case WindowMode::Windowed:
+            SDL_SetWindowFullscreen(window_, 0);
+            SDL_SetWindowBordered(window_, SDL_TRUE);
+            SDL_SetWindowResizable(window_, SDL_TRUE);
+            break;
+        case WindowMode::Fullscreen:
+            SDL_SetWindowFullscreen(window_, SDL_WINDOW_FULLSCREEN);
+            break;
+        case WindowMode::Borderless:
+            SDL_SetWindowFullscreen(window_, SDL_WINDOW_FULLSCREEN_DESKTOP);
+            break;
+        }
+
+        SDL_GetWindowSize(window_, &mainWindowSize_.x, &mainWindowSize_.y);
+        glViewport(0, 0, mainWindowSize_.x, mainWindowSize_.y);
+    }
+
+    WindowMode SDL2App::GetWindowMode() const
+    {
+        return windowMode_;
+    }
+
+    void SDL2App::SetVSync(bool enabled)
+    {
+        vsync_ = enabled;
+        SDL_GL_SetSwapInterval(enabled ? 1 : 0);
+    }
+
+    bool SDL2App::GetVSync() const
+    {
+        return vsync_;
+    }
+
+    void SDL2App::SetResolution(int w, int h)
+    {
+        if (!window_ || w <= 0 || h <= 0) return;
+        // Only resize in windowed mode — fullscreen uses native res
+        if (windowMode_ == WindowMode::Windowed)
+        {
+            SDL_SetWindowSize(window_, w, h);
+            SDL_SetWindowPosition(window_, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+        }
+        mainWindowSize_ = {w, h};
+        glViewport(0, 0, w, h);
+    }
+
+    void SDL2App::SetFPSTarget(int fps)
+    {
+        fpsTarget_ = fps;
+    }
+
+    int SDL2App::GetFPSTarget() const
+    {
+        return fpsTarget_;
     }
 }

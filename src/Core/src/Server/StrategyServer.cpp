@@ -9,6 +9,8 @@
 
 namespace stnks
 {
+    StrategyServer::StrategyServer() : StrategyServer(Config{}) {}
+
     StrategyServer::StrategyServer(const Config& config)
         : config_(config)
         , threads_(2)  // Lightweight pool for headless mode
@@ -199,50 +201,69 @@ namespace stnks
         if (quote.candles.empty()) return;
 
         const auto& last = quote.candles.back();
-        float high  = last.high;
-        float low   = last.low;
-        float close = last.close;
+        float price = last.close;  // Use close price — the latest known price
+
+        // Guard against invalid/uninitialized candle data
+        if (price <= 0.f) return;
 
         auto strategies = store_->GetBySymbol(symbol);
 
+        // Log the full strategy table for this symbol
         for (auto& strat : strategies)
         {
-            if (!strat.IsActive()) continue;
+            const char* statusStr = StatusToString(strat.status);
+            spdlog::info("[Monitor] {} #{} {} {} [{}] entry={:.4f} tp={:.4f} sl={:.4f} exit={:.4f} price={:.4f} enabled={}",
+                         symbol, strat.id,
+                         DirectionToString(strat.direction),
+                         strat.IsEnabled() ? "ON" : "OFF",
+                         statusStr,
+                         strat.entryPrice, strat.takeProfit, strat.stopLoss,
+                         strat.exitPrice, price, strat.enabled);
+        }
+
+        for (auto& strat : strategies)
+        {
+            if (!strat.IsActive() || !strat.IsEnabled()) continue;
+            if (strat.takeProfit <= 0.f && strat.stopLoss <= 0.f) continue;
 
             bool tpHit = false;
             bool slHit = false;
 
-            // make them generic
+            // Check against close price (latest known), not high/low.
+            // Using high/low of daily candles would trigger on the full day's range,
+            // causing false triggers for tight TP/SL levels.
             if (strat.direction == StrategyDirection::Long)
             {
-                tpHit = high >= strat.takeProfit;
-                slHit = low  <= strat.stopLoss;
+                if (strat.takeProfit > 0.f) tpHit = price >= strat.takeProfit;
+                if (strat.stopLoss > 0.f)   slHit = price <= strat.stopLoss;
             }
             else
             {
-                tpHit = low  <= strat.takeProfit;
-                slHit = high >= strat.stopLoss;
+                if (strat.takeProfit > 0.f) tpHit = price <= strat.takeProfit;
+                if (strat.stopLoss > 0.f)   slHit = price >= strat.stopLoss;
             }
-            // these calls as well
+
             if (tpHit)
             {
-                spdlog::info("[StrategyServer] TP HIT for {} #{} @ {:.2f} (target: {:.2f})",
-                             symbol, strat.id, close, strat.takeProfit);
+                spdlog::info("[StrategyServer] TP HIT #{} {} {} price={:.4f} >= tp={:.4f} (entry={:.4f})",
+                             strat.id, symbol, DirectionToString(strat.direction),
+                             price, strat.takeProfit, strat.entryPrice);
 
                 int64_t now = std::time(nullptr);
-                float pnlPct = strat.UnrealizedPnLPercent(close);
-                store_->MarkTriggered(strat.id, StrategyStatus::TPHit, now, close, pnlPct);
-                FireActions(strat, StrategyStatus::TPHit, close);
+                float pnlPct = strat.UnrealizedPnLPercent(price);
+                store_->MarkTriggered(strat.id, StrategyStatus::TPHit, now, price, pnlPct);
+                FireActions(strat, StrategyStatus::TPHit, price);
             }
             else if (slHit)
             {
-                spdlog::info("[StrategyServer] SL HIT for {} #{} @ {:.2f} (stop: {:.2f})",
-                             symbol, strat.id, close, strat.stopLoss);
+                spdlog::info("[StrategyServer] SL HIT #{} {} {} price={:.4f} <= sl={:.4f} (entry={:.4f})",
+                             strat.id, symbol, DirectionToString(strat.direction),
+                             price, strat.stopLoss, strat.entryPrice);
 
                 int64_t now = std::time(nullptr);
-                float pnlPct = strat.UnrealizedPnLPercent(close);
-                store_->MarkTriggered(strat.id, StrategyStatus::SLHit, now, close, pnlPct);
-                FireActions(strat, StrategyStatus::SLHit, close);
+                float pnlPct = strat.UnrealizedPnLPercent(price);
+                store_->MarkTriggered(strat.id, StrategyStatus::SLHit, now, price, pnlPct);
+                FireActions(strat, StrategyStatus::SLHit, price);
             }
         }
     }

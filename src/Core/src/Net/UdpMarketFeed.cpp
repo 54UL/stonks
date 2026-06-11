@@ -21,6 +21,10 @@ namespace stnks
     // MarketFeedServer
     // ════════════════════════════════════════════════════════════════════════════
 
+    MarketFeedServer::MarketFeedServer()
+        : MarketFeedServer(NetFeedConfig{})
+    {}
+
     MarketFeedServer::MarketFeedServer(const NetFeedConfig& config)
         : config_(config)
     {}
@@ -145,10 +149,15 @@ namespace stnks
     // MarketFeedClient
     // ════════════════════════════════════════════════════════════════════════════
 
+    MarketFeedClient::MarketFeedClient()
+        : MarketFeedClient(NetFeedConfig{})
+    {}
+
     MarketFeedClient::MarketFeedClient(const NetFeedConfig& config)
         : config_(config)
     {
         lastHeartbeat_ = std::chrono::steady_clock::now();
+        lastHeartbeatSent_ = std::chrono::steady_clock::now();
     }
 
     MarketFeedClient::~MarketFeedClient()
@@ -160,13 +169,15 @@ namespace stnks
     {
         if (running_.load()) return;
 
-        // Store connection params and launch background thread immediately
-        // so DNS resolution + connect never blocks the UI thread.
+        uint16_t resolvedPort = port > 0 ? port : config_.port;
+        savedHost_ = hostAddr;
+        savedPort_ = resolvedPort;
+        reconnectAttempts_ = 0;
+
         state_ = NetState::Connecting;
         connectStart_ = std::chrono::steady_clock::now();
         running_ = true;
 
-        uint16_t resolvedPort = port > 0 ? port : config_.port;
         thread_ = std::thread(&MarketFeedClient::NetworkLoop, this, hostAddr, resolvedPort);
         spdlog::info("[MarketFeedClient] Connecting to {}:{} (async)", hostAddr, resolvedPort);
     }
@@ -177,6 +188,20 @@ namespace stnks
         if (thread_.joinable())
             thread_.join();
 
+        // Thread handles cleanup, but ensure state is Offline
+        CleanupConnection();
+        state_ = NetState::Offline;
+        reconnectAttempts_ = 0;
+    }
+
+    void MarketFeedClient::SetTickCallback(TickCallback cb)
+    {
+        std::lock_guard<std::mutex> lock(callbackMutex_);
+        callback_ = std::move(cb);
+    }
+
+    void MarketFeedClient::CleanupConnection()
+    {
         if (server_ && host_)
         {
             enet_peer_disconnect_now(server_, 0);
@@ -187,111 +212,160 @@ namespace stnks
             enet_host_destroy(host_);
             host_ = nullptr;
         }
-        state_ = NetState::Offline;
         latencyMs_ = -1.f;
     }
 
-    void MarketFeedClient::SetTickCallback(TickCallback cb)
+    void MarketFeedClient::AttemptReconnect()
     {
-        std::lock_guard<std::mutex> lock(callbackMutex_);
-        callback_ = std::move(cb);
+        CleanupConnection();
+        reconnectAttempts_++;
+        state_ = NetState::Disconnected;
+
+        spdlog::info("[MarketFeedClient] Reconnecting in {:.0f}s (attempt #{})",
+                     kReconnectDelaySec, reconnectAttempts_);
+
+        // Wait kReconnectDelaySec in small increments so Stop() is responsive
+        auto deadline = std::chrono::steady_clock::now()
+                      + std::chrono::milliseconds(static_cast<int>(kReconnectDelaySec * 1000));
+        while (running_.load() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
     void MarketFeedClient::NetworkLoop(std::string hostAddr, uint16_t port)
     {
-        // Create ENet host + initiate connection (this does DNS, may take time)
-        host_ = enet_host_create(nullptr, 1, NET_CHANNEL_COUNT, 0, 0);
-        if (!host_)
-        {
-            spdlog::error("[MarketFeedClient] Failed to create ENet client host");
-            state_ = NetState::Disconnected;
-            return;
-        }
-
-        ENetAddress addr;
-        if (enet_address_set_host(&addr, hostAddr.c_str()) != 0)
-        {
-            spdlog::error("[MarketFeedClient] DNS resolve failed for '{}'", hostAddr);
-            enet_host_destroy(host_);
-            host_ = nullptr;
-            state_ = NetState::Disconnected;
-            return;
-        }
-        addr.port = port;
-
-        server_ = enet_host_connect(host_, &addr, NET_CHANNEL_COUNT, 0);
-        if (!server_)
-        {
-            spdlog::error("[MarketFeedClient] No available peer slot");
-            enet_host_destroy(host_);
-            host_ = nullptr;
-            state_ = NetState::Disconnected;
-            return;
-        }
-
         while (running_.load())
         {
-            if (!host_) break;
-
-            // Connection timeout
-            if (state_.load() == NetState::Connecting)
+            // ── Create ENet host + initiate connection ────────────────────────
+            host_ = enet_host_create(nullptr, 1, NET_CHANNEL_COUNT, 0, 0);
+            if (!host_)
             {
-                auto now = std::chrono::steady_clock::now();
-                double elapsed = std::chrono::duration<double>(now - connectStart_).count();
-                if (elapsed > kConnectTimeoutSec)
-                {
-                    spdlog::warn("[MarketFeedClient] Connection timed out");
-                    state_ = NetState::Disconnected;
-                    break;
-                }
+                spdlog::error("[MarketFeedClient] Failed to create ENet client host");
+                state_ = NetState::Disconnected;
+                if (!running_.load()) break;
+                AttemptReconnect();
+                continue;
             }
 
-            // Send heartbeat every second when connected
-            if (state_.load() == NetState::Connected)
+            ENetAddress addr;
+            if (enet_address_set_host(&addr, hostAddr.c_str()) != 0)
             {
-                auto now = std::chrono::steady_clock::now();
-                double sinceLast = std::chrono::duration<double>(now - lastHeartbeat_).count();
-                if (sinceLast >= 1.0)
-                {
-                    NetHeartbeatPacket hb;
-                    hb.serverTime = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        now.time_since_epoch()).count();
+                spdlog::error("[MarketFeedClient] DNS resolve failed for '{}'", hostAddr);
+                CleanupConnection();
+                if (!running_.load()) break;
+                AttemptReconnect();
+                continue;
+            }
+            addr.port = port;
 
-                    ENetPacket* pkt = enet_packet_create(&hb, sizeof(hb), ENET_PACKET_FLAG_RELIABLE);
-                    enet_peer_send(server_, CHAN_RELIABLE, pkt);
-                    lastHeartbeat_ = now;
-                }
+            server_ = enet_host_connect(host_, &addr, NET_CHANNEL_COUNT, 0);
+            if (!server_)
+            {
+                spdlog::error("[MarketFeedClient] No available peer slot");
+                CleanupConnection();
+                if (!running_.load()) break;
+                AttemptReconnect();
+                continue;
             }
 
-            ENetEvent event;
-            // Service with 10ms timeout to keep loop responsive
-            while (enet_host_service(host_, &event, 10) > 0)
+            state_ = NetState::Connecting;
+            connectStart_ = std::chrono::steady_clock::now();
+            lastHeartbeat_ = std::chrono::steady_clock::now();
+            lastHeartbeatSent_ = std::chrono::steady_clock::now();
+
+            // ── Connection + active loop ──────────────────────────────────────
+            bool shouldReconnect = false;
+
+            while (running_.load())
             {
-                switch (event.type)
+                if (!host_) { shouldReconnect = true; break; }
+
+                auto now = std::chrono::steady_clock::now();
+
+                // Connection timeout
+                if (state_.load() == NetState::Connecting)
                 {
-                case ENET_EVENT_TYPE_CONNECT:
-                    state_ = NetState::Connected;
-                    lastHeartbeat_ = std::chrono::steady_clock::now();
-                    spdlog::info("[MarketFeedClient] Connected to server");
-                    break;
-
-                case ENET_EVENT_TYPE_DISCONNECT:
-                    state_ = NetState::Disconnected;
-                    server_ = nullptr;
-                    latencyMs_ = -1.f;
-                    spdlog::warn("[MarketFeedClient] Disconnected from server");
-                    break;
-
-                case ENET_EVENT_TYPE_RECEIVE:
-                    HandlePacket(event.packet);
-                    enet_packet_destroy(event.packet);
-                    break;
-
-                default:
-                    break;
+                    double elapsed = std::chrono::duration<double>(now - connectStart_).count();
+                    if (elapsed > kConnectTimeoutSec)
+                    {
+                        spdlog::warn("[MarketFeedClient] Connection timed out");
+                        shouldReconnect = true;
+                        break;
+                    }
                 }
+
+                // Heartbeat send + timeout detection
+                if (state_.load() == NetState::Connected)
+                {
+                    // Send heartbeat every second
+                    double sinceSent = std::chrono::duration<double>(now - lastHeartbeatSent_).count();
+                    if (sinceSent >= 1.0)
+                    {
+                        NetHeartbeatPacket hb;
+                        hb.serverTime = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            now.time_since_epoch()).count();
+
+                        ENetPacket* pkt = enet_packet_create(&hb, sizeof(hb), ENET_PACKET_FLAG_RELIABLE);
+                        enet_peer_send(server_, CHAN_RELIABLE, pkt);
+                        lastHeartbeatSent_ = now;
+                    }
+
+                    // If no heartbeat echo received for kHeartbeatTimeoutSec, consider dead
+                    float timeSinceHb = GetTimeSinceLastHeartbeat();
+                    if (timeSinceHb > kHeartbeatTimeoutSec)
+                    {
+                        spdlog::warn("[MarketFeedClient] Heartbeat timeout ({:.1f}s), reconnecting...",
+                                     timeSinceHb);
+                        shouldReconnect = true;
+                        break;
+                    }
+                }
+
+                // Poll ENet events
+                ENetEvent event;
+                while (enet_host_service(host_, &event, 10) > 0)
+                {
+                    switch (event.type)
+                    {
+                    case ENET_EVENT_TYPE_CONNECT:
+                        state_ = NetState::Connected;
+                        lastHeartbeat_ = std::chrono::steady_clock::now();
+                        reconnectAttempts_ = 0;
+                        spdlog::info("[MarketFeedClient] Connected to server");
+                        break;
+
+                    case ENET_EVENT_TYPE_DISCONNECT:
+                        state_ = NetState::Disconnected;
+                        server_ = nullptr;
+                        latencyMs_ = -1.f;
+                        spdlog::warn("[MarketFeedClient] Disconnected from server");
+                        shouldReconnect = true;
+                        break;
+
+                    case ENET_EVENT_TYPE_RECEIVE:
+                        HandlePacket(event.packet);
+                        enet_packet_destroy(event.packet);
+                        break;
+
+                    default:
+                        break;
+                    }
+                }
+
+                if (shouldReconnect) break;
+            }
+
+            // ── Cleanup + reconnect if needed ─────────────────────────────────
+            if (!running_.load()) break;
+
+            if (shouldReconnect)
+            {
+                AttemptReconnect();
+                // Loop back to top to retry connection
             }
         }
+
+        // Final cleanup on exit
+        CleanupConnection();
     }
 
     void MarketFeedClient::HandlePacket(ENetPacket* packet)
@@ -341,7 +415,7 @@ namespace stnks
         }
         case NetMsgType::Heartbeat:
         {
-            // Heartbeat echo — measure round-trip
+            // Heartbeat echo — measure round-trip and refresh last-received timestamp
             if (packet->dataLength >= sizeof(NetHeartbeatPacket))
             {
                 NetHeartbeatPacket hb;
@@ -352,6 +426,7 @@ namespace stnks
                     now.time_since_epoch()).count();
                 float rtt = static_cast<float>(nowMs - hb.serverTime);
                 latencyMs_ = rtt;
+                lastHeartbeat_ = now;  // Reset timeout tracker
             }
             break;
         }

@@ -4,6 +4,9 @@
 
 namespace stnks
 {
+    LocalStrategyService::LocalStrategyService(HttpClient& http, ThreadRegistry& threads)
+        : LocalStrategyService(http, threads, Config{}) {}
+
     LocalStrategyService::LocalStrategyService(HttpClient& http, ThreadRegistry& threads,
                                                 const Config& config)
     {

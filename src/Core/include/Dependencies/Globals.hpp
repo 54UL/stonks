@@ -88,6 +88,11 @@ namespace stnks
             set(gk::prefix::APP,     "title",              "STNKS");
             set(gk::prefix::APP,     "flags",              "WINDOWED");
             set(gk::prefix::APP,     "resolution",         "800,600");
+            set(gk::prefix::APP,     gk::key::WINDOW_MODE,    "0");
+            set(gk::prefix::APP,     gk::key::VSYNC,          "0");
+            set(gk::prefix::APP,     gk::key::RESOLUTION_W,   "1200");
+            set(gk::prefix::APP,     gk::key::RESOLUTION_H,   "800");
+            set(gk::prefix::APP,     gk::key::FPS_TARGET,     "0");
             set(gk::prefix::PATHS,   gk::key::PATH_CONFIG,    "config/");
             set(gk::prefix::PATHS,   gk::key::PATH_SHADERS,   "shaders/");
         }

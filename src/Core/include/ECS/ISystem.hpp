@@ -1,6 +1,7 @@
 #pragma once
 #include <ECS/Entity.hpp>
 
+// if you are here you are looking at the remains of an old fundation, rip 80CC
 namespace stnks {
     class Engine; // forward
 

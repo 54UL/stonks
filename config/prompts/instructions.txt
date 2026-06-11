@@ -1,0 +1,5 @@
+Respond with JSON only. Three arrays:
+1. "recommendations" - [{title, body}] actionable trade ideas
+2. "warnings" - [{title, body, severity: info|warning|alert}] risk alerts
+3. "operations" - [{strategy_id, action: hold|buy|sell|adjust_tp|adjust_sl, urgency: info|warning|alert, reason, suggested_price, confidence: 0-1}]
+   strategy_id=0 means new position. Keep concise (1-2 sentences each).

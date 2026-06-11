@@ -123,6 +123,7 @@ namespace stnks
                 m.name     = q.value("shortname", q.value("longname", ""));
                 m.exchange = q.value("exchDisp", "");
                 m.type     = q.value("quoteType", "");
+                m.source   = "Yahoo Finance";
 
                 if (!m.symbol.empty())
                     results.push_back(std::move(m));

@@ -41,7 +41,8 @@ namespace stnks
             std::string dbName  = "strategies.db";
         };
 
-        explicit StrategyServer(const Config& config = {});
+        explicit StrategyServer();
+        explicit StrategyServer(const Config& config);
 
         // Shared-ownership constructor: uses external store/market instead of creating own.
         // Caller must ensure store and market outlive this server.

@@ -26,6 +26,14 @@ namespace stnks
         AI       = 2   // AI-managed: news analysis → auto-trade or operations/warnings
     };
 
+    enum class BrokerSource : int
+    {
+        Auto       = 0,  // Automatically determined from data source
+        Binance    = 1,  // Binance Spot
+        GBM        = 2,  // GBM+ (Bolsa Mexicana)
+        MetaTrader = 3,  // MetaTrader 5
+    };
+
     struct Strategy
     {
         int64_t            id          = 0;
@@ -52,8 +60,15 @@ namespace stnks
         float              exitPrice      = 0.f;   // Price at which position was exited
         float              closedPnlPct   = 0.f;   // Frozen P/L% at close time
 
+        // Fees: total flat amounts (commissions, spread cost, etc.)
+        float              entryFee       = 0.f;   // Total fee paid on entry
+        float              exitFee        = 0.f;   // Total fee paid on exit
+
         // Enable/disable: disabled strategies are not monitored but still shown
         bool               enabled        = true;
+
+        // Broker source: which broker this operation was made on
+        BrokerSource       broker         = BrokerSource::Auto;
 
         bool IsActive() const { return status == StrategyStatus::Active; }
         bool IsEnabled() const { return enabled; }
@@ -61,43 +76,63 @@ namespace stnks
         bool IsTPSL() const { return type == StrategyType::TPSL; }
         bool IsAI() const { return type == StrategyType::AI; }
 
-        // Risk/reward ratio (TPSL only)
+        // Effective prices adjusted for fees (per-unit cost basis)
+        float EffectiveEntryPrice() const
+        {
+            if (entryFee == 0.f) return entryPrice;
+            float q = (quantity > 0.f) ? quantity : 1.f;
+            return entryPrice + (entryFee / q);
+        }
+
+        float EffectiveExitPrice() const
+        {
+            if (exitFee == 0.f) return exitPrice;
+            float q = (quantity > 0.f) ? quantity : 1.f;
+            return exitPrice - (exitFee / q);
+        }
+
+        // Risk/reward ratio (uses effective entry to reflect real cost basis)
         float RiskReward() const
         {
-            float risk   = std::abs(entryPrice - stopLoss);
-            float reward = std::abs(takeProfit - entryPrice);
+            float eff   = EffectiveEntryPrice();
+            float risk   = std::abs(eff - stopLoss);
+            float reward = std::abs(takeProfit - eff);
             if (risk <= 0.f) return 0.f;
             return reward / risk;
         }
 
-        // Profit/loss percentages (TPSL)
+        // Profit/loss percentages (uses effective entry)
         float TPPercent() const
         {
-            if (entryPrice <= 0.f) return 0.f;
-            return ((takeProfit - entryPrice) / entryPrice) * 100.f;
+            float eff = EffectiveEntryPrice();
+            if (eff <= 0.f) return 0.f;
+            return ((takeProfit - eff) / eff) * 100.f;
         }
         float SLPercent() const
         {
-            if (entryPrice <= 0.f) return 0.f;
-            return ((stopLoss - entryPrice) / entryPrice) * 100.f;
+            float eff = EffectiveEntryPrice();
+            if (eff <= 0.f) return 0.f;
+            return ((stopLoss - eff) / eff) * 100.f;
         }
 
-        // P&L for position tracking (given current market price)
+        // P&L for position tracking (uses effective entry as real cost basis)
         float UnrealizedPnL(float currentPrice) const
         {
+            float eff = EffectiveEntryPrice();
             float diff = (direction == StrategyDirection::Long)
-                         ? (currentPrice - entryPrice)
-                         : (entryPrice - currentPrice);
+                         ? (currentPrice - eff)
+                         : (eff - currentPrice);
             return diff * quantity;
         }
 
         float UnrealizedPnLPercent(float currentPrice) const
         {
-            if (entryPrice <= 0.f) return 0.f;
+            float eff = EffectiveEntryPrice();
+            if (eff <= 0.f) return 0.f;
             float diff = (direction == StrategyDirection::Long)
-                         ? (currentPrice - entryPrice)
-                         : (entryPrice - currentPrice);
-            return (diff / entryPrice) * 100.f;
+                         ? (currentPrice - eff)
+                         : (eff - currentPrice);
+            return (diff / eff) * 100.f;
         }
     };
 
@@ -128,5 +163,28 @@ namespace stnks
         }
         return "Unknown";
     }
+
+    inline const char* BrokerSourceToString(BrokerSource b)
+    {
+        switch (b)
+        {
+        case BrokerSource::Auto:       return "Auto";
+        case BrokerSource::Binance:    return "Binance";
+        case BrokerSource::GBM:        return "GBM+";
+        case BrokerSource::MetaTrader: return "MT5";
+        }
+        return "Unknown";
+    }
+
+    // Map a data source name (from SymbolMatch.source) to a BrokerSource.
+    inline BrokerSource BrokerSourceFromName(const std::string& sourceName)
+    {
+        if (sourceName == "Binance")       return BrokerSource::Binance;
+        if (sourceName == "GBM+")          return BrokerSource::GBM;
+        if (sourceName == "MT5")           return BrokerSource::MetaTrader;
+        return BrokerSource::Auto;
+    }
+
+    inline constexpr int kBrokerSourceCount = 4;
 
 } // namespace stnks

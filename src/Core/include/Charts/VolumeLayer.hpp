@@ -17,6 +17,20 @@ namespace stnks
         ImU32 bearColor    = IM_COL32(214, 48, 49, 120);
         ImU32 highlightCol = IM_COL32(255, 255, 255, 50);
 
+        bool GetValueRange(const ChartViewport& vp, const StockQuote& data,
+                           float& outMin, float& outMax) const override
+        {
+            if (data.candles.empty()) return false;
+            int end = std::min(vp.visibleStart + vp.visibleCount, (int)data.candles.size());
+            float maxVol = 0.f;
+            for (int i = vp.visibleStart; i < end; ++i)
+                maxVol = std::max(maxVol, data.candles[i].volume);
+            if (maxVol <= 0.f) return false;
+            outMin = 0.f;
+            outMax = maxVol;
+            return true;
+        }
+
         void Draw(ImDrawList* drawList, const ChartViewport& vp,
                   const StockQuote& data) override
         {

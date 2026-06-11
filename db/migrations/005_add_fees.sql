@@ -1,0 +1,2 @@
+ALTER TABLE strategies ADD COLUMN entry_fee REAL DEFAULT 0;
+ALTER TABLE strategies ADD COLUMN exit_fee REAL DEFAULT 0;

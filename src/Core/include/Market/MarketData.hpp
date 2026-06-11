@@ -102,12 +102,101 @@ namespace stnks
         return rsi;
     }
 
+    struct MACDData
+    {
+        std::vector<float> macd;      // MACD line (fast EMA - slow EMA)
+        std::vector<float> signal;    // Signal line (EMA of MACD)
+        std::vector<float> histogram; // MACD - signal
+        int fastPeriod   = 12;
+        int slowPeriod   = 26;
+        int signalPeriod = 9;
+    };
+
+    inline MACDData ComputeMACD(const std::vector<Candle>& candles,
+                                 int fastPeriod = 12, int slowPeriod = 26, int signalPeriod = 9)
+    {
+        MACDData result;
+        result.fastPeriod   = fastPeriod;
+        result.slowPeriod   = slowPeriod;
+        result.signalPeriod = signalPeriod;
+
+        int n = (int)candles.size();
+        result.macd.resize(n, NAN);
+        result.signal.resize(n, NAN);
+        result.histogram.resize(n, NAN);
+
+        if (n < slowPeriod + signalPeriod) return result;
+
+        // EMA helper: multiplier = 2 / (period + 1)
+        auto ema = [](float prev, float val, int period) -> float {
+            float k = 2.f / (float)(period + 1);
+            return val * k + prev * (1.f - k);
+        };
+
+        // Seed fast EMA with SMA
+        float fastEma = 0.f;
+        for (int i = 0; i < fastPeriod; ++i)
+            fastEma += candles[i].close;
+        fastEma /= (float)fastPeriod;
+
+        // Seed slow EMA with SMA
+        float slowEma = 0.f;
+        for (int i = 0; i < slowPeriod; ++i)
+            slowEma += candles[i].close;
+        slowEma /= (float)slowPeriod;
+
+        // Compute MACD line from slowPeriod-1 onward
+        for (int i = slowPeriod - 1; i < n; ++i)
+        {
+            if (i == slowPeriod - 1)
+            {
+                // Recalculate fast EMA up to this point
+                fastEma = 0.f;
+                for (int j = 0; j < fastPeriod; ++j)
+                    fastEma += candles[j].close;
+                fastEma /= (float)fastPeriod;
+                for (int j = fastPeriod; j <= i; ++j)
+                    fastEma = ema(fastEma, candles[j].close, fastPeriod);
+                // slowEma already seeded
+            }
+            else
+            {
+                fastEma = ema(fastEma, candles[i].close, fastPeriod);
+                slowEma = ema(slowEma, candles[i].close, slowPeriod);
+            }
+            result.macd[i] = fastEma - slowEma;
+        }
+
+        // Compute signal line (EMA of MACD) starting after enough MACD values
+        int signalStart = slowPeriod - 1 + signalPeriod - 1; //this can be refactored to -2? instead of -1 xxxx -1
+        if (signalStart >= n) return result;
+
+        // Seed signal with SMA of first signalPeriod MACD values
+        float signalEma = 0.f;
+        for (int i = slowPeriod - 1; i < slowPeriod - 1 + signalPeriod; ++i)
+            signalEma += result.macd[i];
+        signalEma /= (float)signalPeriod;
+        result.signal[signalStart] = signalEma;
+        result.histogram[signalStart] = result.macd[signalStart] - signalEma;
+
+        for (int i = signalStart + 1; i < n; ++i)
+        {
+            if (std::isnan(result.macd[i])) continue;
+            signalEma = ema(signalEma, result.macd[i], signalPeriod);
+            result.signal[i] = signalEma;
+            result.histogram[i] = result.macd[i] - signalEma;
+        }
+
+        return result;
+    }
+
     struct SymbolMatch
     {
         std::string symbol;
         std::string name;
         std::string exchange;
-        std::string type;  // "EQUITY", "ETF", etc.
+        std::string type;    // "EQUITY", "ETF", "CRYPTO", etc.
+        std::string source;  // Data source name ("Yahoo Finance", "Binance", "GBM+", etc.)
     };
 
 } // namespace stnks

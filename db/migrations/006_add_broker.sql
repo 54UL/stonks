@@ -1,0 +1,1 @@
+ALTER TABLE strategies ADD COLUMN broker INTEGER DEFAULT 0;

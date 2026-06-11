@@ -23,6 +23,14 @@ namespace stnks
         float overboughtLv = 70.f;
         float oversoldLv   = 30.f;
 
+        bool GetValueRange(const ChartViewport& /*vp*/, const StockQuote& /*data*/,
+                           float& outMin, float& outMax) const override
+        {
+            outMin = 0.f;
+            outMax = 100.f;
+            return true;
+        }
+
         void Draw(ImDrawList* drawList, const ChartViewport& vp,
                   const StockQuote& data) override
         {

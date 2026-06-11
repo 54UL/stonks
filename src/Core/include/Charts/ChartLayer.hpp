@@ -3,9 +3,36 @@
 #include <Market/MarketData.hpp>
 #include <imgui.h>
 #include <string>
+#include <atomic>
 
 namespace stnks
 {
+    // Global crosshair sync state (shared across all chart instances for the same symbol).
+    // Any chart that is hovered writes its focused candle index + timestamp here;
+    // all other charts read it to draw a synced vertical crosshair line.
+    struct SharedCrosshair
+    {
+        std::string symbol;          // Which symbol is being hovered
+        int         candleIdx = -1;  // Focused candle index (-1 = none)
+        int64_t     timestamp = 0;   // Candle timestamp (for matching across different data sets)
+        bool        active    = false;
+
+        void Set(const std::string& sym, int idx, int64_t ts)
+        {
+            symbol    = sym;
+            candleIdx = idx;
+            timestamp = ts;
+            active    = true;
+        }
+
+        void Clear()
+        {
+            active    = false;
+            candleIdx = -1;
+            timestamp = 0;
+        }
+    };
+
     // Viewport state shared across all layers of a chart
     struct ChartViewport
     {
@@ -68,6 +95,11 @@ namespace stnks
         virtual void Draw(ImDrawList* drawList,
                           const ChartViewport& vp,
                           const StockQuote& data) = 0;
+
+        // Optional: report the Y-axis value range for grid drawing in sub-panels.
+        // Return false if no range is available (grid will skip horizontal lines).
+        virtual bool GetValueRange(const ChartViewport& vp, const StockQuote& data,
+                                   float& outMin, float& outMax) const { return false; }
     };
 
 } // namespace stnks

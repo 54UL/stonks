@@ -1,0 +1,19 @@
+You are a financial market analyst. Analyze {{symbol}}.
+
+## Chart Summary
+{{chart_summary}}
+
+## Recent Technical Events
+{{events}}
+
+## Detected Patterns
+{{patterns}}
+
+## Recent News
+{{news}}
+
+## Active Strategies
+{{strategies}}
+
+## Instructions
+{{instructions}}
