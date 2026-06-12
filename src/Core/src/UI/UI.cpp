@@ -170,6 +170,22 @@ namespace stnks
         dashboardPanel_ = std::make_unique<DashboardPanel>(ctx_);
         serverLauncherPanel_ = std::make_unique<ServerLauncherPanel>(ctx_);
 
+        // Activity bar: colored initials (IntelliJ style)
+        activityPanels_ = {
+            {"C",  "Stock Charts",     &showStockCharts_,     ui::kABCharts},
+            {"S",  "Strategies",       &showStrategies_,      ui::kABStrategies},
+            {"P",  "Portfolio",        &showPortfolio_,       ui::kABPortfolio},
+            {"W",  "Strategy Wizard",  &showStrategyWizard_,  ui::kABWizard},
+            {"D",  "Dashboard",        &showDashboard_,       ui::kABDashboard},
+            {"R",  "Recommendations",  &showRecommendations_, ui::kABRecs},
+            {"!",  "Market Warnings",  &showMarketWarnings_,  ui::kABWarnings},
+            {"A",  "AI Operations",    &showAIOperations_,    ui::kABAIOps},
+            {"E",  "Graph Events",     &showGraphEvents_,     ui::kABEvents},
+            {"M",  "Market Signals",   &showMarketSignals_,   ui::kABSignals},
+            {"L",  "Server Launcher",  &showServerLauncher_,  ui::kABServer},
+            {"T",  "Threads Debugger", &showThreadsDebugger_, ui::kABThreads},
+        };
+
         spdlog::info("[UI] Initialized");
     }
 
@@ -872,8 +888,80 @@ namespace stnks
 
     // ── Dock Space & Menu ──────────────────────────────────────────────────────
 
+    void UI::DrawActivityBar(DockSide /*side*/)
+    {
+        const ImGuiViewport* vp = ImGui::GetMainViewport();
+        float barW = kActivityBarWidth;
+        float btnR = (barW - 6.f) * 0.5f; // circle radius
+
+        ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x, vp->WorkPos.y));
+        ImGui::SetNextWindowSize(ImVec2(barW, vp->WorkSize.y));
+        ImGui::SetNextWindowViewport(vp->ID);
+
+        ImGuiWindowFlags flags =
+            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoDocking    | ImGuiWindowFlags_NoScrollbar |
+            ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBringToFrontOnFocus |
+            ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNavFocus;
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(3.f, 4.f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGui::ColorConvertU32ToFloat4(ui::kABBarBg));
+
+        ImGui::Begin("##ActivityBar", nullptr, flags);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        for (int i = 0; i < (int)activityPanels_.size(); ++i)
+        {
+            auto& p = activityPanels_[i];
+            bool active = *p.visible;
+
+            ImGui::PushID(i);
+
+            ImVec2 cursor = ImGui::GetCursorScreenPos();
+            ImVec2 center(cursor.x + barW * 0.5f - 1.5f, cursor.y + btnR);
+
+            // Draw colored circle
+            ImU32 circleCol = active ? p.color : ui::ABDimColor(p.color);
+            dl->AddCircleFilled(center, btnR, circleCol);
+
+            // Active: bright border ring
+            if (active)
+                dl->AddCircle(center, btnR + 1.f, ui::kABRingActive, 0, 1.5f);
+
+            // Draw initial letter centered on the circle
+            const char* txt = p.icon;
+            ImVec2 textSize = ImGui::CalcTextSize(txt);
+            ImVec2 textPos(center.x - textSize.x * 0.5f, center.y - textSize.y * 0.5f);
+            dl->AddText(textPos, active ? ui::kABTextActive : ui::kABTextDim, txt);
+
+            // Invisible button on top for interaction
+            ImGui::InvisibleButton("##ab", ImVec2(barW - 6.f, btnR * 2.f));
+            if (ImGui::IsItemClicked())
+                *p.visible = !*p.visible;
+
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", p.name);
+
+            ImGui::Spacing();
+            ImGui::PopID();
+        }
+
+        ImGui::End();
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar(3);
+    }
+
     void UI::ShowDockSpace()
     {
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        float barW = kActivityBarWidth;
+
+        // Single activity bar on the left edge
+        DrawActivityBar(DockSide::Left);
+
+        // Main dockspace — inset left to make room for activity bar
         ImGuiWindowFlags windowFlags =
             ImGuiWindowFlags_MenuBar |
             ImGuiWindowFlags_NoDocking |
@@ -884,9 +972,8 @@ namespace stnks
             ImGuiWindowFlags_NoBringToFrontOnFocus |
             ImGuiWindowFlags_NoNavFocus;
 
-        const ImGuiViewport* viewport = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(viewport->WorkPos);
-        ImGui::SetNextWindowSize(viewport->WorkSize);
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + barW, viewport->WorkPos.y));
+        ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x - barW, viewport->WorkSize.y));
         ImGui::SetNextWindowViewport(viewport->ID);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
@@ -901,15 +988,14 @@ namespace stnks
         if (!dockLayoutBuilt_)
         {
             dockLayoutBuilt_ = true;
+            ImVec2 dockSize(viewport->WorkSize.x - barW, viewport->WorkSize.y);
+
             ImGui::DockBuilderRemoveNode(dockspaceId);
             ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
-            ImGui::DockBuilderSetNodeSize(dockspaceId, viewport->WorkSize);
-
-            ImGuiID dockLeft, dockRest;
-            ImGui::DockBuilderSplitNode(dockspaceId, ImGuiDir_Left, 0.18f, &dockLeft, &dockRest);
+            ImGui::DockBuilderSetNodeSize(dockspaceId, dockSize);
 
             ImGuiID dockCenter, dockRight;
-            ImGui::DockBuilderSplitNode(dockRest, ImGuiDir_Right, 0.22f, &dockRight, &dockCenter);
+            ImGui::DockBuilderSplitNode(dockspaceId, ImGuiDir_Right, 0.22f, &dockRight, &dockCenter);
 
             ImGuiID dockCenterTop, dockCenterBottom;
             ImGui::DockBuilderSplitNode(dockCenter, ImGuiDir_Down, 0.38f, &dockCenterBottom, &dockCenterTop);
@@ -917,22 +1003,17 @@ namespace stnks
             ImGuiID dockRightTop, dockRightBottom;
             ImGui::DockBuilderSplitNode(dockRight, ImGuiDir_Down, 0.45f, &dockRightBottom, &dockRightTop);
 
-            // ImGui::DockBuilderDockWindow("Dashboard",           dockLeft);
-            // ImGui::DockBuilderDockWindow("###GraphEvents",      dockLeft);
-            // ImGui::DockBuilderDockWindow("###MarketSignals",    dockLeft);
-            // ImGui::DockBuilderDockWindow("Server Launcher",     dockLeft);
-            // ImGui::DockBuilderDockWindow("Threads Debugger",    dockLeft);
-
             ImGui::DockBuilderDockWindow("Stock Charts",        dockCenterTop);
             ImGui::DockBuilderDockWindow("Strategies",          dockCenterBottom);
             ImGui::DockBuilderDockWindow("Portfolio",           dockCenterBottom);
+            ImGui::DockBuilderDockWindow("###GraphEvents",      dockCenterBottom);
+            ImGui::DockBuilderDockWindow("###MarketSignals",    dockCenterBottom);
+
             ImGui::DockBuilderDockWindow("###StrategyWizard",   dockRightTop);
+            ImGui::DockBuilderDockWindow("Dashboard",           dockRightBottom);
             ImGui::DockBuilderDockWindow("Recommendations",     dockRightBottom);
             ImGui::DockBuilderDockWindow("Market Warnings",     dockRightBottom);
             ImGui::DockBuilderDockWindow("AI Operations",       dockRightBottom);
-            ImGui::DockBuilderDockWindow("Dashboard",           dockRightBottom);
-            ImGui::DockBuilderDockWindow("###GraphEvents",      dockRightBottom);
-            ImGui::DockBuilderDockWindow("###MarketSignals",    dockRightBottom);
             ImGui::DockBuilderDockWindow("Server Launcher",     dockRightBottom);
             ImGui::DockBuilderDockWindow("Threads Debugger",    dockRightBottom);
 
