@@ -725,75 +725,109 @@ namespace stnks
     // ── Averaging Cells (Avg Down, Avg Up) ──────────────────────────────────
     //
     // Both columns answer: "if I double my position at current price, what happens?"
-    // AvgDown cell: highlights when you'd be lowering your cost basis (favorable for longs losing)
-    // AvgUp cell:   highlights when you'd be raising your cost basis (favorable for longs winning)
-    // Both always show values so you can see the cost and new average at a glance.
+    // Single "Avg" column that shows context-dependent info:
+    //
+    // Losing (price moved against you):
+    //   "▼ $cost  -X%"  — cost to buy same qty and lower your average (avg down)
+    //   Tooltip: new avg after doubling, total qty
+    //
+    // Winning (price moved in your favor):
+    //   "▲ $profit  +X%"  — extractable profit (sell shares to recover gains, keep original capital)
+    //   Tooltip: shares to sell, remaining position still worth your original investment
 
     void StrategyTablePanel::DrawAveragingCells(Strategy& s)
     {
+        ImGui::TableNextColumn();
+
         float curPrice = ctx_.getCurrentPrice(s.symbol);
         float qty = s.quantity;
         float entry = s.EffectiveEntryPrice();
         bool hasData = curPrice > 0.f && qty > 0.f && entry > 0.f && s.IsActive();
-        bool isLong = s.direction == StrategyDirection::Long;
-        char pb[32];
 
-        // Precompute shared values
-        float cost = 0.f, newAvg = 0.f, avgDeltaPct = 0.f;
-        bool isAvgDown = false;  // true when doubling lowers effective avg
-        if (hasData)
+        if (!hasData)
         {
-            cost = qty * curPrice;
-            newAvg = (entry + curPrice) / 2.f;
-            avgDeltaPct = ((newAvg - entry) / entry) * 100.f;
-            isAvgDown = isLong ? (curPrice < entry) : (curPrice > entry);
+            ImGui::TextDisabled("-");
+            HandleRowClick(s, {});
+            return;
         }
 
-        auto drawCell = [&](bool isDownCell) {
-            ImGui::TableNextColumn();
-            if (!hasData) { ImGui::TextDisabled("-"); HandleRowClick(s, {}); return; }
+        bool isLong  = s.direction == StrategyDirection::Long;
+        bool isLosing = isLong ? (curPrice < entry) : (curPrice > entry);
+        char pb[32];
 
-            // Highlight the active cell green, dim the other one
-            bool isActive = (isDownCell == isAvgDown);
-            auto cellColor = isActive
-                ? (isDownCell ? ui::kColorBearish : ui::kColorBullish)
-                : ImVec4(0.45f, 0.45f, 0.45f, 1.f);
+        if (isLosing)
+        {
+            // ── AVG DOWN: cost to double position at current price ───────
+            float cost   = qty * curPrice;
+            float newAvg = (entry + curPrice) / 2.f;
+            float pct    = ((newAvg - entry) / entry) * 100.f;
 
-            // Cell text: cost to double + avg shift %
-            ImGui::TextColored(cellColor, "%s  %+.1f%%",
-                               FmtPrice(pb, sizeof(pb), cost, s.symbol), avgDeltaPct);
+            ImGui::TextColored(ui::kColorWarning, "- %s  %+.1f%%",
+                               FmtPrice(pb, sizeof(pb), cost, s.symbol), pct);
 
             if (ImGui::IsItemHovered())
             {
                 ImGui::BeginTooltip();
-                ImGui::TextColored(ImVec4(1.f, 1.f, 1.f, 1.f),
-                                   isDownCell ? "Average Down" : "Average Up");
+                ImGui::TextColored(ui::kColorWarning, "Average Down");
                 ImGui::Separator();
 
-                // Cost line — big and clear
                 ImGui::TextColored(ImVec4(1.f, 0.85f, 0.4f, 1.f), "Cost to double:");
                 ImGui::SameLine();
                 ImGui::TextColored(ImVec4(1.f, 0.85f, 0.4f, 1.f), "%s",
                                    FmtPrice(pb, sizeof(pb), cost, s.symbol));
-
                 ImGui::Spacing();
-                ImGui::Text("%s %.0f shares @ %s",
-                            isLong ? "Buy" : "Sell", qty,
+                ImGui::Text("Buy %.0f more @ %s", qty,
                             FmtPrice(pb, sizeof(pb), curPrice, s.symbol));
-
                 ImGui::Spacing();
                 ImGui::Text("Current avg:  %s", FmtPrice(pb, sizeof(pb), entry, s.symbol));
-                ImGui::TextColored(isAvgDown == isDownCell ? ui::kColorBullish : ui::kColorBearish,
+                ImGui::TextColored(ui::kColorBullish,
                                    "New avg:      %s (%+.1f%%)",
-                                   FmtPrice(pb, sizeof(pb), newAvg, s.symbol), avgDeltaPct);
+                                   FmtPrice(pb, sizeof(pb), newAvg, s.symbol), pct);
                 ImGui::Text("Total qty:    %.0f", qty * 2.f);
                 ImGui::EndTooltip();
             }
-            HandleRowClick(s, {});
-        };
+        }
+        else
+        {
+            // ── AVG UP: extractable profit without affecting original capital ─
+            // Profit = value at current price minus cost basis
+            float basis  = qty * entry;
+            float value  = qty * curPrice;
+            float profit = isLong ? (value - basis) : (basis - value);
+            float pct    = (profit / basis) * 100.f;
 
-        drawCell(true);   // Avg Down column
-        drawCell(false);  // Avg Up column
+            // Shares you can sell to extract the profit, keeping remaining
+            // shares still worth your original investment
+            float sellQty      = profit / curPrice;
+            float remainingQty = qty - sellQty;
+
+            ImGui::TextColored(ui::kColorBullish, "+ %s  %+.1f%%",
+                               FmtPrice(pb, sizeof(pb), profit, s.symbol), pct);
+
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::BeginTooltip();
+                ImGui::TextColored(ui::kColorBullish, "Average Up (Take Profit)");
+                ImGui::Separator();
+
+                ImGui::TextColored(ImVec4(0.4f, 0.85f, 1.f, 1.f), "Extractable profit:");
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(0.4f, 0.85f, 1.f, 1.f), "%s",
+                                   FmtPrice(pb, sizeof(pb), profit, s.symbol));
+                ImGui::Spacing();
+                ImGui::Text("Sell %.1f shares @ %s", sellQty,
+                            FmtPrice(pb, sizeof(pb), curPrice, s.symbol));
+                ImGui::Text("Keep %.1f shares (worth %s = original investment)",
+                            remainingQty,
+                            FmtPrice(pb, sizeof(pb), basis, s.symbol));
+                ImGui::Spacing();
+                ImGui::TextDisabled("Your remaining position covers your initial cost.");
+                ImGui::TextDisabled("The profit above is free to withdraw.");
+                ImGui::EndTooltip();
+            }
+        }
+
+        HandleRowClick(s, {});
     }
 
     // ── Notes + Action Cells ────────────────────────────────────────────────
@@ -1142,7 +1176,7 @@ namespace stnks
         ImGui::Combo("##fStat", &stf, "All\0Active\0TP Hit\0SL Hit\0Cancel\0Disabled\0");
         f.statusFilter = stf - 1;
 
-        // Remaining cols (Broker, Age, AvgDown, AvgUp, Notes, Actions): skip
+        // Remaining cols (Broker, Age, Avg, Notes, Actions): skip
         for (int i = (int)StratCol::Broker; i < kStratColCount; ++i)
             ImGui::TableNextColumn();
 

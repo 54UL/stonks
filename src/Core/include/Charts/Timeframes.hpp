@@ -22,8 +22,9 @@ namespace stnks
         {"1W",  "1wk", "2y",  false},
         {"1M",  "1mo", "5y",  false},
         {"1Y",  "1mo", "max", false},
+        {"4Y",  "1wk", "max", false},
     };
-    inline constexpr int kTimeframeCount   = 11;
+    inline constexpr int kTimeframeCount   = 12;
     inline constexpr int kDefaultTimeframe = 7;
 
 } // namespace stnks

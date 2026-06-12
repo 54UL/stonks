@@ -1270,16 +1270,14 @@ namespace stnks
 
         ImVec4 color = ui::FreshnessColor((float)age);
 
-        auto fmtAge = [](int64_t secs) -> std::string {
-            if (secs < 60)   return std::to_string(secs) + "s";
-            if (secs < 3600) return std::to_string(secs / 60) + "m";
-            return std::to_string(secs / 3600) + "h";
-        };
+        char ageBuf[16], candleBuf[16];
+        ui::FormatDuration(ageBuf, sizeof(ageBuf), age);
+        ui::FormatDuration(candleBuf, sizeof(candleBuf), candleAge);
 
         ImGui::SameLine(ImGui::GetContentRegionAvail().x - 200.f);
-        ImGui::TextColored(color, "Data: %s ago", fmtAge(age).c_str());
+        ImGui::TextColored(color, "Data: %s ago", ageBuf);
         ImGui::SameLine();
-        ImGui::TextDisabled("| Last candle: %s ago", fmtAge(candleAge).c_str());
+        ImGui::TextDisabled("| Last candle: %s ago", candleBuf);
 
         auto* source = marketService_->GetActiveSource();
         if (kTimeframes[panel.timeframeIdx].realtime)

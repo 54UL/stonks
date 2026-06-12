@@ -4,6 +4,7 @@
 #include <Charts/Timeframes.hpp>
 #include <Market/MarketData.hpp>
 #include <Market/MarketHours.hpp>
+#include <UI/UIConstants.hpp>
 #include <imgui.h>
 #include <string>
 #include <functional>
@@ -320,21 +321,16 @@ namespace stnks
             int64_t age = now - quote.fetchedAt;
             int64_t candleAge = now - quote.candles.back().timestamp;
 
-            auto fmtAge = [](int64_t secs) -> std::string {
-                if (secs < 60)   return std::to_string(secs) + "s";
-                if (secs < 3600) return std::to_string(secs / 60) + "m";
-                return std::to_string(secs / 3600) + "h";
-            };
+            char ageBuf[16], candleBuf[16];
+            ui::FormatDuration(ageBuf, sizeof(ageBuf), age);
+            ui::FormatDuration(candleBuf, sizeof(candleBuf), candleAge);
 
-            ImVec4 color;
-            if (age < 30)       color = ImVec4(0.3f, 0.85f, 0.4f, 1.f);
-            else if (age < 120) color = ImVec4(0.9f, 0.75f, 0.2f, 1.f);
-            else                color = ImVec4(0.7f, 0.3f, 0.3f, 1.f);
+            ImVec4 color = ui::FreshnessColor((float)age);
 
             ImGui::SameLine(ImGui::GetContentRegionAvail().x - 280.f);
-            ImGui::TextColored(color, "Data: %s ago", fmtAge(age).c_str());
+            ImGui::TextColored(color, "Data: %s ago", ageBuf);
             ImGui::SameLine();
-            ImGui::TextDisabled("| Candle: %s ago", fmtAge(candleAge).c_str());
+            ImGui::TextDisabled("| Candle: %s ago", candleBuf);
 
             // Source info
             if (getSourceInfo)

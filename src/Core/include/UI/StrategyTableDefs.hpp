@@ -25,10 +25,9 @@ namespace stnks
         Status   = 14,
         Broker   = 15,
         Age      = 16,
-        AvgDown  = 17,
-        AvgUp    = 18,
-        Notes    = 19,
-        Actions  = 20
+        Avg      = 17,
+        Notes    = 18,
+        Actions  = 19
     };
 
     struct StratColDef
@@ -60,8 +59,7 @@ namespace stnks
         {"Status",     70.f, ImGuiTableColumnFlags_WidthFixed,                                              true },
         {"Broker",     70.f, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort,               false},
         {"Age",       110.f, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort,               false},
-        {"Avg Down",   70.f, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort,               false},
-        {"Avg Up",     70.f, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort,               false},
+        {"Avg",       120.f, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort,               false},
         {"Notes",       0.f, ImGuiTableColumnFlags_WidthStretch,                                            true },
         {"",           80.f, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort,               false},
     };

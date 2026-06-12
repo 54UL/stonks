@@ -353,6 +353,7 @@ namespace stnks::ui
 
     // ── Age Formatting ──────────────────────────────────────────────────────
 
+    // Full verbose format: "3d 2h 15m 4s"
     inline void FormatAge(char* buf, int bufSize, int64_t elapsed)
     {
         int64_t days  = elapsed / 86400;
@@ -371,6 +372,15 @@ namespace stnks::ui
                      (long long)mins, (long long)secs);
         else
             snprintf(buf, bufSize, "%llds", (long long)secs);
+    }
+
+    // Compact format for freshness badges: "5s", "3m", "2h", "4d"
+    inline void FormatDuration(char* buf, int bufSize, int64_t secs)
+    {
+        if (secs < 60)        snprintf(buf, bufSize, "%llds",  (long long)secs);
+        else if (secs < 3600) snprintf(buf, bufSize, "%lldm",  (long long)(secs / 60));
+        else if (secs < 86400) snprintf(buf, bufSize, "%lldh", (long long)(secs / 3600));
+        else                   snprintf(buf, bufSize, "%lldd", (long long)(secs / 86400));
     }
 
     // ── Event Time Range ────────────────────────────────────────────────────
