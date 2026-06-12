@@ -37,6 +37,17 @@ namespace stnks
     // Forward
     class StrategyLayer;
 
+    // Activity bar panel entry — colored initial like IntelliJ
+    struct PanelEntry
+    {
+        const char* icon;      // 1-2 char initial
+        const char* name;      // Full name (tooltip)
+        bool*       visible;   // Pointer to showXxx_ flag
+        ImU32       color;     // Circle background color
+    };
+
+    enum class DockSide { Left };
+
     class UI : public ExecutionPipeline
     {
     public:
@@ -51,6 +62,7 @@ namespace stnks
         // ── Top-level orchestration ──────────────────────────────────────
         void ShowDockSpace();
         void ShowMenuBar();
+        void DrawActivityBar(DockSide side);
         void ShowStockCharts();
         void ShowStrategyWizard();
         void ShowSymbolSelector();
@@ -206,6 +218,10 @@ namespace stnks
 
         // Pending view
         PendingStrategyView pendingView_;
+
+        // ── Activity Bar ────────────────────────────────────────────────
+        std::vector<PanelEntry> activityPanels_;
+        static constexpr float kActivityBarWidth = 30.f;
 
         // ── Refactored Panels ────────────────────────────────────────────
         UIContext ctx_;

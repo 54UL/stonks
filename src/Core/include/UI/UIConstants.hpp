@@ -67,6 +67,33 @@ namespace stnks::ui
     inline constexpr ImVec4 kTimeframeBtnRT   = {0.15f, 0.45f, 0.20f, 1.f};
     inline constexpr ImVec4 kTimeframeBtnNorm = {0.20f, 0.28f, 0.45f, 1.f};
 
+    // ── Activity Bar palette (ImU32 for ImDrawList) ───────────────────────
+    inline constexpr ImU32 kABCharts     = IM_COL32( 60, 140, 220, 255);  // blue
+    inline constexpr ImU32 kABStrategies = IM_COL32(220, 160,  40, 255);  // gold
+    inline constexpr ImU32 kABPortfolio  = IM_COL32( 50, 180, 100, 255);  // green
+    inline constexpr ImU32 kABWizard     = IM_COL32(180,  80, 200, 255);  // purple
+    inline constexpr ImU32 kABDashboard  = IM_COL32( 80, 180, 200, 255);  // cyan
+    inline constexpr ImU32 kABRecs       = IM_COL32( 50, 160,  80, 255);  // emerald
+    inline constexpr ImU32 kABWarnings   = IM_COL32(220,  80,  60, 255);  // red
+    inline constexpr ImU32 kABAIOps      = IM_COL32(140, 100, 220, 255);  // lavender
+    inline constexpr ImU32 kABEvents     = IM_COL32(200, 130,  50, 255);  // orange
+    inline constexpr ImU32 kABSignals    = IM_COL32( 60, 200, 180, 255);  // teal
+    inline constexpr ImU32 kABServer     = IM_COL32(120, 120, 140, 255);  // gray
+    inline constexpr ImU32 kABThreads    = IM_COL32(100, 100, 120, 255);  // dark gray
+    inline constexpr ImU32 kABBarBg      = IM_COL32( 15,  18,  23, 255);  // bar background
+    inline constexpr ImU32 kABTextActive = IM_COL32(255, 255, 255, 255);
+    inline constexpr ImU32 kABTextDim    = IM_COL32(200, 200, 200, 180);
+    inline constexpr ImU32 kABRingActive = IM_COL32(255, 255, 255, 100);
+
+    // Dim a color to ~1/3 brightness for inactive state
+    inline constexpr ImU32 ABDimColor(ImU32 col)
+    {
+        return IM_COL32(
+            ((col >>  0) & 0xFF) / 3,
+            ((col >>  8) & 0xFF) / 3,
+            ((col >> 16) & 0xFF) / 3, 180);
+    }
+
     // ── Layout Sizes ────────────────────────────────────────────────────────
 
     inline constexpr float kDisabledAlpha       = 0.5f;
