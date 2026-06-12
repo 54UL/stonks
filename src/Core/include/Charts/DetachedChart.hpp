@@ -1,11 +1,14 @@
 #pragma once
 
 #include <Charts/StockChart.hpp>
+#include <Charts/Timeframes.hpp>
 #include <Market/MarketData.hpp>
+#include <Market/MarketHours.hpp>
 #include <imgui.h>
 #include <string>
 #include <functional>
 #include <cstring>
+#include <ctime>
 
 namespace stnks
 {
@@ -55,6 +58,24 @@ namespace stnks
         // Args: (chart, symbol)
         std::function<void(StockChart&, const std::string&)> onWireTearOut;
 
+        // Callback: fired when user changes timeframe.
+        // Args: (detachedChartId, symbol, interval, range)
+        std::function<void(int, const std::string&, const char*, const char*)> onTimeframeChanged;
+
+        // Timeframe tracking
+        int timeframeIdx = 7; // Default = 1D (kDefaultTimeframe)
+
+        // Data source info for freshness display
+        struct SourceInfo
+        {
+            const char* name     = nullptr;
+            bool        realtime = false;
+            int         delaySec = 0;
+            const char* brokerName = nullptr; // non-null if RT broker active
+        };
+        // Callback to get current source info (wired by UI)
+        std::function<SourceInfo()> getSourceInfo;
+
         // Unique counter for generating window IDs
         static int nextId_;
         int        id = 0;
@@ -98,6 +119,8 @@ namespace stnks
         {
             if (layersCreated) return;
             layersCreated = true;
+
+            chart.suppressHeader = true;
 
             StrategyLayer* sl = nullptr;
 
@@ -170,7 +193,7 @@ namespace stnks
 
             EnsureLayers();
 
-            ImGui::SetNextWindowSize(ImVec2(640, 440), ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowSize(ImVec2(640, 480), ImGuiCond_FirstUseEver);
 
             ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar |
                                      ImGuiWindowFlags_NoScrollWithMouse;
@@ -178,8 +201,9 @@ namespace stnks
             std::string title = GetTitle();
             ImGui::Begin(title.c_str(), &open, flags);
 
-            // --- Toolbar: symbol search + view mode swap + indicators ---
             ImGui::PushID(id);
+
+            // ── Row 1: Symbol search + View mode + Indicators ──────────────
             ImGui::SetNextItemWidth(120.f);
             if (ImGui::InputText("##dcSearch", searchBuf, sizeof(searchBuf),
                                  ImGuiInputTextFlags_EnterReturnsTrue))
@@ -198,17 +222,15 @@ namespace stnks
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Type symbol and press Enter to change");
 
-            // View mode swap combo
             ImGui::SameLine();
             ImGui::TextDisabled("|");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(75.f);
             if (ImGui::Combo("##dcView", &viewModeIdx, kViewModes, IM_ARRAYSIZE(kViewModes)))
             {
-                // Map combo index to focused indicator string
                 switch (viewModeIdx)
                 {
-                case 0: SetFocusedIndicator(""); break;          // Full
+                case 0: SetFocusedIndicator(""); break;
                 case 1: SetFocusedIndicator("Candles"); break;
                 case 2: SetFocusedIndicator("Volume"); break;
                 case 3: SetFocusedIndicator("RSI"); break;
@@ -223,6 +245,17 @@ namespace stnks
             if (!quote.candles.empty())
             {
                 chart.DrawIndicatorCombo();
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Reset"))
+                    chart.ResetView();
+            }
+
+            // ── Row 2: Timeframe buttons + Freshness ───────────────────────
+            DrawTimeframeBar();
+
+            // ── Chart ──────────────────────────────────────────────────────
+            if (!quote.candles.empty())
+            {
                 chart.Draw(("##dc_" + std::to_string(id)).c_str());
             }
             else if (searchDirty)
@@ -238,6 +271,112 @@ namespace stnks
             ImGui::End();
             return open;
         }
+
+    private:
+        void DrawTimeframeBar()
+        {
+            for (int tf = 0; tf < kTimeframeCount; ++tf)
+            {
+                if (tf > 0) ImGui::SameLine(0.f, 2.f);
+                bool selected = (timeframeIdx == tf);
+
+                if (selected)
+                {
+                    ImVec4 btnCol = kTimeframes[tf].realtime
+                        ? ImVec4(0.15f, 0.55f, 0.3f, 1.f)
+                        : ImVec4(0.2f, 0.35f, 0.6f, 1.f);
+                    ImGui::PushStyleColor(ImGuiCol_Button, btnCol);
+                }
+                if (ImGui::SmallButton(kTimeframes[tf].label))
+                {
+                    if (timeframeIdx != tf)
+                    {
+                        timeframeIdx = tf;
+                        quote = StockQuote{};
+                        chart = StockChart{};
+                        layersCreated = false;
+                        searchDirty = true;
+
+                        if (onTimeframeChanged)
+                        {
+                            const char* interval = kTimeframes[tf].realtime
+                                ? "1m" : kTimeframes[tf].interval;
+                            onTimeframeChanged(id, symbol, interval, kTimeframes[tf].range);
+                        }
+                    }
+                }
+                if (selected)
+                    ImGui::PopStyleColor();
+            }
+
+            DrawFreshnessInfo();
+        }
+
+        void DrawFreshnessInfo()
+        {
+            if (quote.candles.empty() || quote.fetchedAt <= 0) return;
+
+            int64_t now = (int64_t)std::time(nullptr);
+            int64_t age = now - quote.fetchedAt;
+            int64_t candleAge = now - quote.candles.back().timestamp;
+
+            auto fmtAge = [](int64_t secs) -> std::string {
+                if (secs < 60)   return std::to_string(secs) + "s";
+                if (secs < 3600) return std::to_string(secs / 60) + "m";
+                return std::to_string(secs / 3600) + "h";
+            };
+
+            ImVec4 color;
+            if (age < 30)       color = ImVec4(0.3f, 0.85f, 0.4f, 1.f);
+            else if (age < 120) color = ImVec4(0.9f, 0.75f, 0.2f, 1.f);
+            else                color = ImVec4(0.7f, 0.3f, 0.3f, 1.f);
+
+            ImGui::SameLine(ImGui::GetContentRegionAvail().x - 280.f);
+            ImGui::TextColored(color, "Data: %s ago", fmtAge(age).c_str());
+            ImGui::SameLine();
+            ImGui::TextDisabled("| Candle: %s ago", fmtAge(candleAge).c_str());
+
+            // Source info
+            if (getSourceInfo)
+            {
+                auto si = getSourceInfo();
+                if (kTimeframes[timeframeIdx].realtime)
+                {
+                    ImGui::SameLine();
+                    if (si.brokerName)
+                        ImGui::TextColored(ImVec4(0.3f, 0.85f, 0.4f, 1.f), "(RT: %s)", si.brokerName);
+                    else
+                        ImGui::TextColored(ImVec4(0.9f, 0.75f, 0.2f, 1.f), "(RT: %s)",
+                            si.name ? si.name : "none");
+                }
+                else if (si.name && !si.realtime)
+                {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(%s ~%dm)", si.name, si.delaySec / 60);
+                }
+            }
+
+            // Market state
+            if (!symbol.empty())
+            {
+                MarketState mktState = MarketHours::GetState(symbol);
+                MarketType mktType = MarketHours::ClassifySymbol(symbol);
+                ImVec4 stateCol;
+                switch (mktState)
+                {
+                case MarketState::Open:       stateCol = ImVec4(0.3f, 0.85f, 0.4f, 1.f); break;
+                case MarketState::PreMarket:
+                case MarketState::AfterHours: stateCol = ImVec4(0.9f, 0.75f, 0.2f, 1.f); break;
+                default:                      stateCol = ImVec4(0.5f, 0.5f, 0.5f, 1.f); break;
+                }
+                ImGui::SameLine();
+                ImGui::TextColored(stateCol, "[%s %s]",
+                    MarketHours::MarketTypeToString(mktType),
+                    MarketHours::StateToString(mktState));
+            }
+        }
+
+    public:
 
         // Update chart data (called when fetch completes)
         void UpdateData(const StockQuote& newQuote)

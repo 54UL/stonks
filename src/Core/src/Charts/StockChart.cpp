@@ -539,31 +539,34 @@ namespace stnks
         if (layerTreeDirty_ || layerTree_.empty())
             ApplyLayerTree();
 
-        // Header
-        const auto& last = data_.candles.back();
-        ImVec4 priceCol = last.IsBullish()
-            ? ImVec4(0.15f, 0.65f, 0.36f, 1.f)
-            : ImVec4(0.84f, 0.19f, 0.19f, 1.f);
+        // Header (skipped when detached chart provides its own toolbar)
+        if (!suppressHeader)
+        {
+            const auto& last = data_.candles.back();
+            ImVec4 priceCol = last.IsBullish()
+                ? ImVec4(0.15f, 0.65f, 0.36f, 1.f)
+                : ImVec4(0.84f, 0.19f, 0.19f, 1.f);
 
-        ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.95f, 1.f), "%s", data_.symbol.c_str());
-        ImGui::SameLine();
-        { char pb[32]; FmtPrice(pb, sizeof(pb), last.close, data_.symbol);
-        ImGui::TextColored(priceCol, "%s %s", pb, data_.currency.c_str()); }
-        if (!data_.exchange.empty())
-        {
+            ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.95f, 1.f), "%s", data_.symbol.c_str());
             ImGui::SameLine();
-            ImGui::TextDisabled("(%s)", data_.exchange.c_str());
-        }
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Reset"))
-            ResetView();
-        ImGui::SameLine();
-        DrawIndicatorCombo();
-        if (onDuplicateChart)
-        {
+            { char pb[32]; FmtPrice(pb, sizeof(pb), last.close, data_.symbol);
+            ImGui::TextColored(priceCol, "%s %s", pb, data_.currency.c_str()); }
+            if (!data_.exchange.empty())
+            {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(%s)", data_.exchange.c_str());
+            }
             ImGui::SameLine();
-            if (ImGui::SmallButton("Detach"))
-                onDuplicateChart();
+            if (ImGui::SmallButton("Reset"))
+                ResetView();
+            ImGui::SameLine();
+            DrawIndicatorCombo();
+            if (onDuplicateChart)
+            {
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Detach"))
+                    onDuplicateChart();
+            }
         }
 
         // Layout — compute sub-panel heights from tree roots

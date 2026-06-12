@@ -39,6 +39,10 @@ namespace stnks
         void DrawIndicatorCombo();
         void ResetView();
 
+        // When true, Draw() skips the header row (symbol, price, Reset, Graphs, Detach).
+        // Used by DetachedChart which provides its own toolbar.
+        bool suppressHeader = false;
+
         // Update strategies displayed on the chart (called from UI each frame)
         void SetStrategies(const std::vector<Strategy>& strategies);
 

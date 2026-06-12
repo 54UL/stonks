@@ -281,7 +281,7 @@ namespace stnks
             {
                 for (auto& dc : detachedCharts_)
                 {
-                    if (dc.symbol == result.symbol)
+                    if (dc.symbol == result.symbol && (dc.searchDirty || dc.refreshing))
                     {
                         dc.UpdateData(detachedCopy);
                         if (systemToggles_.graphEvents)
@@ -763,7 +763,9 @@ namespace stnks
             if (dc.refreshTimer <= 0.f)
             {
                 dc.refreshing = true;
-                marketService_->FetchQuoteAsync(dc.symbol, "1d", "6mo");
+                auto& tf = kTimeframes[dc.timeframeIdx];
+                const char* interval = tf.realtime ? "1m" : tf.interval;
+                marketService_->FetchQuoteAsync(dc.symbol, interval, tf.range);
                 dc.refreshTimer = effectiveInterval;
             }
         }
@@ -1375,8 +1377,35 @@ namespace stnks
     void UI::WireDetachedChart(DetachedChart& dc)
     {
         dc.onSymbolChanged = [this](int dcId, const std::string& newSymbol) {
-            marketService_->FetchQuoteAsync(newSymbol, "1d", "6mo");
-            spdlog::info("[UI] Detached chart #{} changing to {}", dcId, newSymbol);
+            // Find this detached chart's current timeframe
+            int tfIdx = kDefaultTimeframe;
+            for (auto& d : detachedCharts_)
+                if (d.id == dcId) { tfIdx = d.timeframeIdx; break; }
+            auto& tf = kTimeframes[tfIdx];
+            const char* interval = tf.realtime ? "1m" : tf.interval;
+            marketService_->FetchQuoteAsync(newSymbol, interval, tf.range);
+            spdlog::info("[UI] Detached chart #{} changing to {} ({})", dcId, newSymbol, tf.label);
+        };
+
+        dc.onTimeframeChanged = [this](int dcId, const std::string& sym,
+                                        const char* interval, const char* range) {
+            marketService_->FetchQuoteAsync(sym, interval, range);
+            spdlog::info("[UI] Detached chart #{} switching {} to {}/{}", dcId, sym, interval, range);
+        };
+
+        dc.getSourceInfo = [this]() -> DetachedChart::SourceInfo {
+            DetachedChart::SourceInfo si{};
+            auto* source = marketService_->GetActiveSource();
+            if (source)
+            {
+                si.name     = source->GetName();
+                si.realtime = source->IsRealtime();
+                si.delaySec = source->GetDelaySeconds();
+            }
+            auto* broker = marketService_->GetActiveBrokerSource();
+            if (broker)
+                si.brokerName = broker->GetName();
+            return si;
         };
 
         dc.onWireStrategyLayer = [this](StrategyLayer& sl, const std::string& sym) {

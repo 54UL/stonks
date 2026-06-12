@@ -739,4 +739,4 @@ app/                          # Runtime data dir (strategies.db, logs) -- create
 ```
 # Technical debt
 - AI code neeeds lots of refactor
-- 
+- WIN32 headers (implement agnostic shit)
