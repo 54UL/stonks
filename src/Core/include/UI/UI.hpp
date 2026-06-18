@@ -152,7 +152,7 @@ namespace stnks
         float                          priceCacheInterval_    = 15.f;
 
         // Strategy service
-        std::unique_ptr<IStrategyService> service_;
+        std::unique_ptr<IStrategyService> strategyService_;
 
         // Wizard
         StrategyWizard wizard_;

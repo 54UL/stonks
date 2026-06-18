@@ -30,7 +30,7 @@ namespace stnks
     void UI::BuildContext()
     {
         ctx_.engine          = engine_.get();
-        ctx_.service         = service_.get();
+        ctx_.service         = strategyService_.get();
         ctx_.marketService   = marketService_.get();
         ctx_.newsService     = newsService_.get();
         ctx_.analyzer        = analyzer_.get();
@@ -98,7 +98,7 @@ namespace stnks
 
         if (serverUrl && serverUrl[0] != '\0')
         {
-            service_ = std::make_unique<RemoteStrategyService>(*httpClient_, serverUrl);
+            strategyService_ = std::make_unique<RemoteStrategyService>(*httpClient_, serverUrl);
             spdlog::info("[UI] Remote mode: connecting to {}", serverUrl);
         }
         else
@@ -106,7 +106,7 @@ namespace stnks
             LocalStrategyService::Config localCfg;
             localCfg.server.pollIntervalSec = 60;
             localCfg.startMonitoring = true;
-            service_ = std::make_unique<LocalStrategyService>(*httpClient_, engine_->threadRegistry_, localCfg);
+            strategyService_ = std::make_unique<LocalStrategyService>(*httpClient_, engine_->threadRegistry_, localCfg);
             spdlog::info("[UI] Monolith mode: embedded server");
         }
 
@@ -186,6 +186,15 @@ namespace stnks
             {"T",  "Threads Debugger", &showThreadsDebugger_, ui::kABThreads},
         };
 
+        // Load first active strategy
+        auto active = strategyService_->GetActiveStrategies();
+
+        if (!active.empty()) {
+            const auto symbol = active.at(0).symbol;
+            FetchSymbol(symbol);
+            spdlog::warn("[UI] Loaded first active strategy: {}", symbol);
+        }
+
         spdlog::info("[UI] Initialized");
     }
 
@@ -201,19 +210,19 @@ namespace stnks
             LocalStrategyService::Config localCfg;
             localCfg.server.pollIntervalSec = 60;
             localCfg.startMonitoring = true;
-            service_ = std::make_unique<LocalStrategyService>(*httpClient_, engine_->threadRegistry_, localCfg);
+            strategyService_ = std::make_unique<LocalStrategyService>(*httpClient_, engine_->threadRegistry_, localCfg);
             spdlog::info("[UI] Switched to monolith mode");
             PushToast("Switched to local (embedded) server", ui::kToastInfo);
         }
         else
         {
-            service_ = std::make_unique<RemoteStrategyService>(*httpClient_, serverUrl);
+            strategyService_ = std::make_unique<RemoteStrategyService>(*httpClient_, serverUrl);
             spdlog::info("[UI] Connecting to remote server: {}", serverUrl);
             PushToast("Connecting to " + serverUrl + "...", ui::kToastInfo);
         }
 
         // Update context pointer so all panels see the new service
-        ctx_.service = service_.get();
+        ctx_.service = strategyService_.get();
         strategiesDirty_ = true;
     }
 
@@ -446,7 +455,7 @@ namespace stnks
             if (isNew)
             {
                 telemetry_.strategySaves++;
-                int64_t id = service_->InsertStrategy(s);
+                int64_t id = strategyService_->InsertStrategy(s);
                 if (id > 0)
                 {
                     spdlog::info("[Strategy] Created #{} for {} (type={} entry={:.2f})",
@@ -456,13 +465,13 @@ namespace stnks
                 else
                 {
                     spdlog::error("[Strategy] Failed to insert for {} (server: {})",
-                                  s.symbol, service_->GetServerUrl());
+                                  s.symbol, strategyService_->GetServerUrl());
                     PushToast("Failed to create strategy for " + s.symbol, ui::kToastError);
                 }
             }
             else
             {
-                bool ok = service_->UpdateStrategy(s);
+                bool ok = strategyService_->UpdateStrategy(s);
                 if (ok)
                     spdlog::info("[Strategy] Updated #{} for {}", s.id, s.symbol);
                 else
@@ -488,7 +497,7 @@ namespace stnks
                     break;
                 }
             }
-            service_->CancelStrategy(id, exitPrice);
+            strategyService_->CancelStrategy(id, exitPrice);
             strategiesDirty_ = true;
             spdlog::info("[Strategy] Cancelled #{}", id);
         };
@@ -620,7 +629,7 @@ namespace stnks
         strat.triggeredAt  = now;
         strat.exitPrice    = price;
         strat.closedPnlPct = strat.UnrealizedPnLPercent(price);
-        if (!service_->UpdateStrategy(strat))
+        if (!strategyService_->UpdateStrategy(strat))
             PushToast("Failed to save trigger for " + strat.symbol, ui::kToastError);
         graphEvents_.RecordStrategyEvent(strat, trigger, price);
         signalService_.IngestStrategyTrigger(strat, trigger, price);
@@ -795,9 +804,9 @@ namespace stnks
 
     void UI::TickStrategyReload()
     {
-        if (strategiesDirty_ && service_->IsConnected())
+        if (strategiesDirty_ && strategyService_->IsConnected())
         {
-            cachedStrategies_ = service_->GetAllStrategies();
+            cachedStrategies_ = strategyService_->GetAllStrategies();
             strategiesDirty_  = false;
         }
     }
@@ -850,6 +859,7 @@ namespace stnks
         if (insightRefreshTimer_ <= 0.f)
         {
             RefreshInsights();
+
             insightRefreshTimer_ = insightRefreshInterval_;
         }
     }
@@ -956,10 +966,10 @@ namespace stnks
     void UI::ShowDockSpace()
     {
         const ImGuiViewport* viewport = ImGui::GetMainViewport();
-        float barW = kActivityBarWidth;
+        // float barW = kActivityBarWidth; // releated to actvity bar
 
         // Single activity bar on the left edge
-        DrawActivityBar(DockSide::Left);
+        // DrawActivityBar(DockSide::Left); ugly fucking ass dock bar
 
         // Main dockspace — inset left to make room for activity bar
         ImGuiWindowFlags windowFlags =
@@ -972,8 +982,8 @@ namespace stnks
             ImGuiWindowFlags_NoBringToFrontOnFocus |
             ImGuiWindowFlags_NoNavFocus;
 
-        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + barW, viewport->WorkPos.y));
-        ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x - barW, viewport->WorkSize.y));
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x /*+ barW*/, viewport->WorkPos.y));
+        ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x /*- barW,*/, viewport->WorkSize.y));
         ImGui::SetNextWindowViewport(viewport->ID);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
@@ -988,7 +998,7 @@ namespace stnks
         if (!dockLayoutBuilt_)
         {
             dockLayoutBuilt_ = true;
-            ImVec2 dockSize(viewport->WorkSize.x - barW, viewport->WorkSize.y);
+            ImVec2 dockSize(viewport->WorkSize.x /*- barW*/, viewport->WorkSize.y);
 
             ImGui::DockBuilderRemoveNode(dockspaceId);
             ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
@@ -1194,16 +1204,16 @@ namespace stnks
                 }
             }
 
-            if (!handled && service_)
+            if (!handled && strategyService_)
             {
                 if (result.id > 0)
                 {
-                    if (!service_->UpdateStrategy(result))
+                    if (!strategyService_->UpdateStrategy(result))
                         PushToast("Failed to update strategy #" + std::to_string(result.id), ui::kToastError);
                 }
                 else
                 {
-                    if (service_->InsertStrategy(result) <= 0)
+                    if (strategyService_->InsertStrategy(result) <= 0)
                         PushToast("Failed to create strategy for " + result.symbol, ui::kToastError);
                 }
                 strategiesDirty_ = true;
@@ -2077,10 +2087,10 @@ namespace stnks
                 ImGui::TableSetColumnIndex(1); ImGui::Text("%.2f", r.ms);
                 ImGui::TableSetColumnIndex(2); ImGui::TextDisabled(r.async ? "worker" : "main");
                 ImGui::TableSetColumnIndex(3);
-                float barW = (r.ms / maxMs) * ImGui::GetContentRegionAvail().x;
+                // float barW = (r.ms / maxMs) * ImGui::GetContentRegionAvail().x;
                 ImVec2 p = ImGui::GetCursorScreenPos();
                 ImGui::GetWindowDrawList()->AddRectFilled(
-                    p, {p.x + barW, p.y + 12.f},
+                    p, {p.x  /*+ barW*/, p.y + 12.f},
                     ImGui::ColorConvertFloat4ToU32(r.col), 2.f);
                 ImGui::Dummy({ImGui::GetContentRegionAvail().x, 12.f});
             }
