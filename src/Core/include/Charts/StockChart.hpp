@@ -6,6 +6,7 @@
 #include <Charts/VolumeLayer.hpp>
 #include <Charts/RSILayer.hpp>
 #include <Charts/MACDLayer.hpp>
+#include <Charts/VolumeProfileLayer.hpp>
 #include <Charts/StrategyLayer.hpp>
 #include <Events/GraphEvent.hpp>
 #include <Market/MarketData.hpp>

@@ -1,6 +1,9 @@
 # Backlog
 
 
+## Strategies
+- [  ] Add dynamic take profit when the trend is going up and stay below the %2 market so that we can avoid the loss when the market goes down
+
 ## Generate docs
 - [ ] Diagrams
 - [ ] API Docs (Swagger, doxygen,etc)

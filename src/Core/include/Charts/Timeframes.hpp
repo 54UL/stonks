@@ -9,10 +9,10 @@ namespace stnks
         const char* range;
         bool        realtime;
     };
-
+    // hmmmmm
     inline constexpr Timeframe kTimeframes[] = {
-        {"1m",  "1m",  "1d",  false},
         {"R",   "rt",  "1d",  true},
+        {"1m",  "1m",  "1d",  false},
         {"5m",  "5m",  "5d",  false},
         {"15m", "15m", "5d",  false},
         {"30m", "30m", "1mo", false},

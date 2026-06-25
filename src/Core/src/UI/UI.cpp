@@ -272,6 +272,7 @@ namespace stnks
                     panel.chart.AddLayer<VolumeLayer>();
                     panel.chart.AddLayer<RSILayer>();
                     panel.chart.AddLayer<MACDLayer>();
+                    panel.chart.AddLayer<VolumeProfileLayer>();
                     panel.chart.SetData(panel.quote);
                     if (systemToggles_.graphEvents)
                     {
@@ -1351,8 +1352,7 @@ namespace stnks
         }
     }
 
-    void UI::DrawChartFreshnessIndicator(const ChartPanelData& panel)
-    {
+    void UI::DrawChartFreshnessIndicator(const ChartPanelData& panel) const {
         if (panel.quote.candles.empty() || panel.quote.fetchedAt <= 0) return;
 
         int64_t now = (int64_t)std::time(nullptr);
@@ -1398,8 +1398,8 @@ namespace stnks
 
     void UI::DrawChartOverlay(ChartPanelData& panel)
     {
-        ImVec2 chartMin = ImGui::GetItemRectMin();
-        ImVec2 chartMax = ImGui::GetItemRectMax();
+        const ImVec2 chartMin = ImGui::GetItemRectMin();
+        const ImVec2 chartMax = ImGui::GetItemRectMax();
         auto* stratLayer = panel.chart.GetStrategyLayer();
         if (!stratLayer) return;
 
@@ -1693,8 +1693,6 @@ namespace stnks
                          const char* interval,
                          const char* range)
     {
-        telemetry_.marketFetches++;
-
         for (auto& panel : charts_)
         {
             if (panel.symbol == symbol)
@@ -1704,6 +1702,7 @@ namespace stnks
                 panel.chart = StockChart{};
                 marketService_->FetchQuoteAsync(symbol, interval, range);
                 spdlog::info("[UI] Re-fetching {} ({})", symbol, interval);
+                telemetry_.marketFetches++;
                 return;
             }
         }
@@ -2199,7 +2198,7 @@ namespace stnks
         if (toasts_.empty()) return;
 
         float dt = ImGui::GetIO().DeltaTime;
-        ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+        const ImGuiViewport* vp = ImGui::GetMainViewport();
 
         float menuBarHeight = ImGui::GetFrameHeight() + 4.f;
         float offsetY = menuBarHeight + 8.f;
@@ -2219,7 +2218,8 @@ namespace stnks
                 alpha = (t.maxLife - t.lifetime) / 0.3f;
 
             ImGui::SetNextWindowPos(
-                ImVec2(12.f, offsetY), ImGuiCond_Always);
+                ImVec2(vp->Pos.x + 12.f, vp->Pos.y + offsetY), ImGuiCond_Always);
+            ImGui::SetNextWindowViewport(vp->ID);
             ImGui::SetNextWindowSize(ImVec2(toastWidth, 0.f));
             ImGui::SetNextWindowBgAlpha(0.85f * alpha);
 

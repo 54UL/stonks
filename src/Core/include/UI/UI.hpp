@@ -86,7 +86,7 @@ namespace stnks
 
         // ── Chart helpers ────────────────────────────────────────────────
         void DrawChartTab(ChartPanelData& panel);
-        void DrawChartFreshnessIndicator(const ChartPanelData& panel);
+        void DrawChartFreshnessIndicator(const ChartPanelData& panel) const;
         void DrawChartOverlay(ChartPanelData& panel);
         void DrawSearchDropdown(const std::string& currentQuery);
 
@@ -237,7 +237,7 @@ namespace stnks
         std::unique_ptr<DashboardPanel>        dashboardPanel_;
         std::unique_ptr<ServerLauncherPanel>   serverLauncherPanel_;
 
-        // Preset symbols
+        // Preset symbols (TODO: MOVE TO AN CONFIG FILE)
         static constexpr const char* kPresetUS[] = {
             "AAPL", "MSFT", "TSLA", "NVDA", "AMZN", "GOOGL", "META", "NFLX", "AMD", "INTC"
         };

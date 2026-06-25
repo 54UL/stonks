@@ -40,6 +40,8 @@ set(STNKS_CORE_HEADERS
     include/Strategy/Strategy.hpp
     include/Strategy/StrategyStore.hpp
     # Database
+    include/Db/DbStore.hpp
+    include/Db/Database.hpp
     include/Db/MigrationRunner.hpp
     include/Db/Queries.hpp
     include/Db/StrategySchema.hpp
@@ -87,6 +89,7 @@ set(STNKS_CORE_SOURCES
     # Strategy
     src/Strategy/StrategyStore.cpp
     # Database
+    src/Db/Database.cpp
     src/Db/MigrationRunner.cpp
     src/Db/StrategySchema.cpp
     # Events
@@ -147,6 +150,7 @@ if(NOT STNKS_HEADLESS)
         include/Charts/MACDLayer.hpp
         include/Charts/ChartGrid.hpp
         include/Charts/DetachedChart.hpp
+        include/Charts/VolumeProfileLayer.hpp
         include/Charts/IStrategyRenderer.hpp
         include/Charts/TPSLRenderer.hpp
         include/Charts/StrategyLayer.hpp

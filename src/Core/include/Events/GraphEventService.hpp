@@ -40,6 +40,9 @@ namespace stnks
         // Total unread count
         int UnreadCount() const;
 
+        // Push an externally generated event (e.g., from VolumeProfileLayer)
+        void PushEvent(const std::string& symbol, GraphEvent event);
+
         // Clear all events for a symbol (or all if empty)
         void Clear(const std::string& symbol = "");
 
@@ -65,6 +68,7 @@ namespace stnks
         void ScanMACD(const std::string& symbol, const std::vector<Candle>& candles, ScanState& state);
         void ScanEMA(const std::string& symbol, const std::vector<Candle>& candles, ScanState& state);
         void ScanBollinger(const std::string& symbol, const std::vector<Candle>& candles, ScanState& state);
+        void ScanVolumeProfile(const std::string& symbol, const std::vector<Candle>& candles, ScanState& state);
 
         // Pattern recognition: scans recent events for multi-indicator patterns
         void ScanPatterns(const std::string& symbol, const std::vector<Candle>& candles);

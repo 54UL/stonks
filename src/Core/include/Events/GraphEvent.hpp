@@ -17,6 +17,7 @@ namespace stnks
         EMA        = 5,  // EMA crossovers (golden cross, death cross)
         Bollinger  = 6,  // Bollinger Band signals
         Pattern    = 7,  // Multi-indicator pattern recognition
+        VolProfile = 8,  // Volume profile shape (P/D/B)
     };
 
     // Severity / importance
@@ -51,6 +52,7 @@ namespace stnks
         case EventSource::EMA:       return "EMA";
         case EventSource::Bollinger: return "BB";
         case EventSource::Pattern:   return "Pattern";
+        case EventSource::VolProfile: return "VP";
         }
         return "Unknown";
     }

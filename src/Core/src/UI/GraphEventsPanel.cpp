@@ -21,6 +21,7 @@ namespace stnks
         case EventSource::EMA:       label = "EMA";    col = {0.9f,0.7f,0.3f,1.f}; break;
         case EventSource::Bollinger: label = "BB";     col = {0.6f,0.9f,0.6f,1.f}; break;
         case EventSource::Pattern:   label = "PATRN";  col = {1.f,0.5f,0.8f,1.f}; break;
+        case EventSource::VolProfile:label = "VP";     col = {0.7f,0.8f,1.f,1.f}; break;
         default:                     label = "?";      col = {0.6f,0.6f,0.6f,1.f}; break;
         }
     }
@@ -83,7 +84,7 @@ namespace stnks
             ImGui::TableSetupColumn("Description", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableSetupColumn("Score",   ImGuiTableColumnFlags_WidthFixed, 40.f);
             ImGui::TableSetupColumn("Time",    ImGuiTableColumnFlags_WidthFixed, 60.f);
-            ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 110.f);
+            ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 150.f);
             ImGui::TableHeadersRow();
 
             for (int i = 0; i < (int)events.size(); ++i)
@@ -161,7 +162,8 @@ namespace stnks
 
         // Score
         ImGui::TableNextColumn();
-        if (ev.source == EventSource::Pattern && ev.score < 1.f)
+        if ((ev.source == EventSource::Pattern || ev.source == EventSource::VolProfile)
+            && ev.score > 0.f && ev.score < 1.f)
         {
             ImVec4 sc = ev.score >= 0.7f ? ui::kColorBullish
                       : ev.score >= 0.5f ? ui::kColorWarning : ui::kColorBearish;
@@ -189,11 +191,47 @@ namespace stnks
         ImGui::TableNextColumn();
         if (ev.symbol.empty()) return;
 
+        // View button — scroll chart to the event candle
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.35f, 0.6f, 1.f));
+        if (ImGui::SmallButton("View"))
+        {
+            bool found = false;
+            for (auto& panel : *ctx_.charts)
+            {
+                if (panel.symbol == ev.symbol)
+                {
+                    if (ev.candleIdx >= 0) panel.chart.ScrollToCandle(ev.candleIdx);
+                    found = true;
+                    break;
+                }
+            }
+            // Try detached charts
+            if (!found)
+            {
+                for (auto& dc : *ctx_.detachedCharts)
+                {
+                    if (dc.symbol == ev.symbol)
+                    {
+                        if (ev.candleIdx >= 0) dc.chart.ScrollToCandle(ev.candleIdx);
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            // No chart open for this symbol — fetch it
+            if (!found && ctx_.fetchSymbol)
+                ctx_.fetchSymbol(ev.symbol, "1d", "6mo");
+        }
+        ImGui::PopStyleColor();
+
+        ImGui::SameLine();
+
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.55f, 0.3f, 1.f));
         if (ImGui::SmallButton("Long"))
         {
             float price = ctx_.getCurrentPrice(ev.symbol);
-            StrategyType type = (ev.source == EventSource::Pattern) ? StrategyType::TPSL : StrategyType::Position;
+            StrategyType type = (ev.source == EventSource::Pattern || ev.source == EventSource::VolProfile)
+                ? StrategyType::TPSL : StrategyType::Position;
             ctx_.wizard->OpenCreate(ev.symbol, type, StrategyDirection::Long, price);
             *ctx_.showStrategyWizard = true;
         }
@@ -205,7 +243,8 @@ namespace stnks
         if (ImGui::SmallButton("Short"))
         {
             float price = ctx_.getCurrentPrice(ev.symbol);
-            StrategyType type = (ev.source == EventSource::Pattern) ? StrategyType::TPSL : StrategyType::Position;
+            StrategyType type = (ev.source == EventSource::Pattern || ev.source == EventSource::VolProfile)
+                ? StrategyType::TPSL : StrategyType::Position;
             ctx_.wizard->OpenCreate(ev.symbol, type, StrategyDirection::Short, price);
             *ctx_.showStrategyWizard = true;
         }

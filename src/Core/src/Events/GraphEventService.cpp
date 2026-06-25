@@ -189,6 +189,7 @@ namespace stnks
         ScanMACD(symbol, quote.candles, state);
         ScanEMA(symbol, quote.candles, state);
         ScanBollinger(symbol, quote.candles, state);
+        ScanVolumeProfile(symbol, quote.candles, state);
 
         state.lastScannedIdx  = n - 1;
         state.lastCandleCount = n;
@@ -270,6 +271,12 @@ namespace stnks
     {
         std::lock_guard<std::mutex> lock(mutex_);
         return (int)newEvents_.size();
+    }
+
+    void GraphEventService::PushEvent(const std::string& symbol, GraphEvent event)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        Push(symbol, std::move(event));
     }
 
     void GraphEventService::Clear(const std::string& symbol)
@@ -1351,6 +1358,164 @@ namespace stnks
                 ev.detail = buf;
                 Push(symbol, std::move(ev));
             }
+        }
+    }
+
+    // ── Volume Profile Pattern Detection ──────────────────────────────────────
+
+    void GraphEventService::ScanVolumeProfile(const std::string& symbol,
+                                               const std::vector<Candle>& candles,
+                                               ScanState& state)
+    {
+        int n = (int)candles.size();
+        const int windowSize = 20;
+        const int stepSize   = 5;  // Check every 5 candles to avoid spam
+        const int bucketCount = 30;
+
+        if (n < windowSize + 5) return;
+
+        int start = std::max(windowSize, state.lastScannedIdx + 1);
+        // Align to step grid
+        start = ((start - windowSize) / stepSize) * stepSize + windowSize;
+
+        for (int i = start; i < n; i += stepSize)
+        {
+            int lo = i - windowSize;
+            int hi = i;
+
+            // Find price range for this window
+            float pMin = 1e18f, pMax = -1e18f;
+            for (int j = lo; j < hi; ++j)
+            {
+                pMin = std::min(pMin, candles[j].low);
+                pMax = std::max(pMax, candles[j].high);
+            }
+            if (pMax <= pMin) continue;
+
+            float bucketSize = (pMax - pMin) / (float)bucketCount;
+            if (bucketSize <= 0.f) continue;
+
+            // Build volume buckets
+            std::vector<float> buckets(bucketCount, 0.f);
+            for (int j = lo; j < hi; ++j)
+            {
+                const auto& c = candles[j];
+                float cLo = std::min(c.open, c.close);
+                float cHi = std::max(c.open, c.close);
+
+                for (int b = 0; b < bucketCount; ++b)
+                {
+                    float bLo = pMin + (float)b * bucketSize;
+                    float bHi = pMin + (float)(b + 1) * bucketSize;
+                    float overlapLo = std::max(cLo, bLo);
+                    float overlapHi = std::min(cHi, bHi);
+
+                    if (overlapLo < overlapHi)
+                    {
+                        float bodyRange = cHi - cLo;
+                        float frac = (bodyRange > 0.f)
+                            ? (overlapHi - overlapLo) / bodyRange
+                            : 1.f / (float)bucketCount;
+                        buckets[b] += c.volume * frac;
+                    }
+                    else if (cLo == cHi && c.close >= bLo && c.close < bHi)
+                    {
+                        buckets[b] += c.volume;
+                    }
+                }
+            }
+
+            // Find POC
+            float maxVol = 0.f;
+            int pocIdx = 0;
+            float totalVol = 0.f;
+            for (int b = 0; b < bucketCount; ++b)
+            {
+                totalVol += buckets[b];
+                if (buckets[b] > maxVol) { maxVol = buckets[b]; pocIdx = b; }
+            }
+            if (totalVol <= 0.f) continue;
+
+            float pocRelative = (float)pocIdx / (float)bucketCount;
+
+            // Volume skew: above vs below POC
+            float volAbove = 0.f, volBelow = 0.f;
+            for (int b = 0; b < pocIdx; ++b) volBelow += buckets[b];
+            for (int b = pocIdx + 1; b < bucketCount; ++b) volAbove += buckets[b];
+            float skew = (volAbove - volBelow) / totalVol;
+
+            // Compute Value Area (70%)
+            float vaTarget = totalVol * 0.70f;
+            float vaVol = buckets[pocIdx];
+            int vaLo = pocIdx, vaHi = pocIdx;
+            while (vaVol < vaTarget && (vaLo > 0 || vaHi < bucketCount - 1))
+            {
+                float belowVol = (vaLo > 0) ? buckets[vaLo - 1] : 0.f;
+                float aboveVol = (vaHi < bucketCount - 1) ? buckets[vaHi + 1] : 0.f;
+                if (belowVol >= aboveVol && vaLo > 0)
+                    vaVol += buckets[--vaLo];
+                else if (vaHi < bucketCount - 1)
+                    vaVol += buckets[++vaHi];
+                else if (vaLo > 0)
+                    vaVol += buckets[--vaLo];
+                else break;
+            }
+
+            float pocPrice = pMin + ((float)pocIdx + 0.5f) * bucketSize;
+            float vahPrice = pMin + (float)(vaHi + 1) * bucketSize;
+            float valPrice = pMin + (float)vaLo * bucketSize;
+
+            // Detect shape
+            const char* shapeName = nullptr;
+            EventSeverity severity = EventSeverity::Info;
+            float confidence = 0.f;
+
+            if (pocRelative < 0.38f && skew < -0.15f)
+            {
+                shapeName  = "P-Shape (Accumulation)";
+                severity   = EventSeverity::Alert;
+                confidence = std::min(1.f, std::abs(skew) * 1.5f + (0.38f - pocRelative));
+            }
+            else if (pocRelative > 0.62f && skew > 0.15f)
+            {
+                shapeName  = "D-Shape (Distribution)";
+                severity   = EventSeverity::Warning;
+                confidence = std::min(1.f, std::abs(skew) * 1.5f + (pocRelative - 0.62f));
+            }
+            else if (pocRelative >= 0.30f && pocRelative <= 0.70f &&
+                     std::abs(skew) < 0.20f)
+            {
+                float vaWidthRel = (float)(vaHi - vaLo + 1) / (float)bucketCount;
+                if (vaWidthRel < 0.50f)
+                {
+                    shapeName  = "B-Shape (Balanced)";
+                    severity   = EventSeverity::Info;
+                    confidence = std::min(1.f,
+                        (1.f - std::abs(skew)) * 0.5f +
+                        (1.f - vaWidthRel) * 0.3f +
+                        (0.5f - std::abs(pocRelative - 0.5f)) * 0.4f);
+                }
+            }
+
+            if (!shapeName || confidence < 0.35f) continue;
+
+            GraphEvent ev;
+            ev.source    = EventSource::VolProfile;
+            ev.severity  = severity;
+            ev.symbol    = symbol;
+            ev.timestamp = candles[hi - 1].timestamp;
+            ev.candleIdx = hi - 1;
+            ev.score     = confidence;
+            ev.title     = std::string("VP ") + shapeName;
+
+            char buf[256];
+            snprintf(buf, sizeof(buf),
+                     "%s VP %s over %d bars | POC: %.2f | VAH: %.2f | VAL: %.2f | Confidence: %.0f%%",
+                     symbol.c_str(), shapeName, windowSize,
+                     pocPrice, vahPrice, valPrice, confidence * 100.f);
+            ev.detail = buf;
+
+            Push(symbol, std::move(ev));
         }
     }
 

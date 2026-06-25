@@ -133,6 +133,7 @@ namespace stnks
                 chart.AddLayer<VolumeLayer>();
                 chart.AddLayer<RSILayer>();
                 chart.AddLayer<MACDLayer>();
+                chart.AddLayer<VolumeProfileLayer>();
             }
             else
             {
@@ -167,6 +168,7 @@ namespace stnks
                     chart.AddLayer<VolumeLayer>();
                     chart.AddLayer<RSILayer>();
                     chart.AddLayer<MACDLayer>();
+                    chart.AddLayer<VolumeProfileLayer>();
                 }
             }
 

@@ -1,22 +1,26 @@
 #pragma once
 
+// StrategyStore — domain facade over Database + DbStore<Strategy>.
+//
+// Provides named convenience methods (GetActive, GetBySymbol, MarkTriggered)
+// on top of the generic DbStore. All CRUD and queries are handled by DbStore;
+// this class only adds strategy-specific business logic (e.g., default timestamps).
+//
+// Adding a new table does NOT require a new Store class — just define a schema
+// (like kStrategySchema) and use DbStore directly.
+
 #include <Strategy/Strategy.hpp>
+#include <Db/StrategySchema.hpp>
+#include <Db/Database.hpp>
 #include <string>
 #include <vector>
-#include <functional>
-
-struct sqlite3;
+#include <memory>
 
 namespace stnks
 {
-    // SQLite-backed persistent storage for strategies.
-    // Uses MigrationRunner for schema management (db/migrations/*.sql)
-    // and seed scripts (db/seeds/*.sql) on first run.
     class StrategyStore
     {
     public:
-        // Resolves an absolute path for the DB file.
-        // Uses ASSETS_STNKS env var if set, otherwise "app/" relative to CWD.
         explicit StrategyStore(const std::string& dbName = "strategies.db");
         ~StrategyStore();
 
@@ -39,18 +43,17 @@ namespace stnks
         bool MarkTriggered(int64_t id, StrategyStatus status, int64_t triggeredAt,
                            float exitPrice = 0.f, float closedPnlPct = 0.f);
 
-        // Get resolved DB path (for diagnostics)
-        const std::string& GetDbPath() const { return dbPath_; }
+        // Diagnostics
+        const std::string& GetDbPath() const;
+
+        // Direct access to the generic store (for future callers that want
+        // full DbStore API — variadic Where, ExecQuery, RunQuery, etc.)
+        StrategyDbStore*       Store()       { return store_.get(); }
+        const StrategyDbStore* Store() const { return store_.get(); }
 
     private:
-        void RunMigrations();
-
-        static std::string ResolveDbPath(const std::string& dbName);
-        static std::string ResolveDbRoot();
-
-        sqlite3*    db_     = nullptr;
-        std::string dbPath_;
-        std::string dbRoot_;  // Project root for finding db/ folder
+        std::unique_ptr<db::Database>   db_;
+        std::unique_ptr<StrategyDbStore> store_;
     };
 
 } // namespace stnks
