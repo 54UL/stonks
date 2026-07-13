@@ -150,7 +150,7 @@ TEST_F(BrokerActionTest, DryRunValidates)
     BrokerAction action(*http_, config);
 
     EXPECT_TRUE(action.Validate());
-    EXPECT_EQ(action.Name(), "BrokerAction (GBM)");
+    EXPECT_EQ(action.Name(), "BrokerAction");
 }
 
 TEST_F(BrokerActionTest, DryRunExecuteSucceeds)

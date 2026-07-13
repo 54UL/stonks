@@ -14,7 +14,6 @@ namespace stnks
     public:
         const char* TypeName() const override { return "TP / SL"; }
 
-        // ── Draw strategy visualization ─────────────────────────────────────
 
         void Draw(ImDrawList* drawList, const ChartViewport& vp,
                   const Strategy& strategy, bool editing,
@@ -29,7 +28,6 @@ namespace stnks
             float yTP    = vp.PriceToY(strategy.takeProfit);
             float ySL    = vp.PriceToY(strategy.stopLoss);
 
-            // Start rendering from entry position on the chart
             float left  = ResolveEntryX(vp, candles, strategy);
             float right = ResolveRightX(vp, candles, strategy);
 
@@ -37,7 +35,6 @@ namespace stnks
             bool tpHit     = strategy.status == StrategyStatus::TPHit;
             bool slHit     = strategy.status == StrategyStatus::SLHit;
 
-            // --- Take profit zone ---
             ImU32 tpFill = active ? kTPFillColor : (tpHit ? kTPTriggeredFill : kCancelledFill);
             ImU32 tpBord = active ? kTPBorderColor : IM_COL32(38, 166, 91, 60);
 
@@ -47,7 +44,8 @@ namespace stnks
             drawList->AddRectFilled(ImVec2(left, tpTop), ImVec2(right, tpBottom), tpFill);
             drawList->AddRect(ImVec2(left, tpTop), ImVec2(right, tpBottom), tpBord, 0.f, 0, 1.0f);
 
-            // --- Stop loss zone ---
+
+
             ImU32 slFill = active ? kSLFillColor : (slHit ? kSLTriggeredFill : kCancelledFill);
             ImU32 slBord = active ? kSLBorderColor : IM_COL32(214, 48, 49, 60);
 
@@ -57,15 +55,18 @@ namespace stnks
             drawList->AddRectFilled(ImVec2(left, slTop), ImVec2(right, slBottom), slFill);
             drawList->AddRect(ImVec2(left, slTop), ImVec2(right, slBottom), slBord, 0.f, 0, 1.0f);
 
-            // --- Entry line (solid) ---
+
+
             ImU32 entryCol = active ? kEntryColor : IM_COL32(255, 200, 50, 80);
             drawList->AddLine(ImVec2(left, yEntry), ImVec2(right, yEntry), entryCol, 1.5f);
 
-            // --- TP / SL dashed lines ---
+
+
             DrawDashedLine(drawList, ImVec2(left, yTP), ImVec2(right, yTP), tpBord);
             DrawDashedLine(drawList, ImVec2(left, ySL), ImVec2(right, ySL), slBord);
 
-            // --- Labels (only when NOT editing — gizmos replace them) ---
+
+
             if (!editing)
             {
                 float labelX = right - 150.f;
@@ -88,19 +89,22 @@ namespace stnks
                 DrawLabel(drawList, ImVec2(labelX, ySL + (ySL > yEntry ? 2.f : -16.f)),
                           slBord, "%s", slBuf);
 
-                // R:R label
+
+
                 char rrBuf[32];
                 snprintf(rrBuf, sizeof(rrBuf), "R:R %.1f", strategy.RiskReward());
                 DrawLabel(drawList, ImVec2(left + 4.f, yEntry - 16.f),
                           IM_COL32(180, 180, 200, 200), "%s", rrBuf);
 
-                // Direction label
+
+
                 ImU32 dirCol = strategy.direction == StrategyDirection::Long
                     ? IM_COL32(38, 166, 91, 220) : IM_COL32(214, 48, 49, 220);
                 DrawLabel(drawList, ImVec2(left + 4.f, yEntry + 2.f),
                           dirCol, "%s", DirectionToString(strategy.direction));
 
-                // Status badge for triggered/cancelled
+
+
                 if (!active)
                 {
                     const char* badge = StatusToString(strategy.status);
@@ -116,7 +120,8 @@ namespace stnks
                         kLabelBgColor, 3.f);
                     drawList->AddText(badgePos, badgeCol, badge);
 
-                    // Triggered date + exit price
+
+
                     if (strategy.triggeredAt > 0)
                     {
                         time_t tt = static_cast<time_t>(strategy.triggeredAt);
@@ -148,7 +153,6 @@ namespace stnks
             }
         }
 
-        // ── Interactive gizmos ──────────────────────────────────────────────
 
         StrategyInteraction HandleGizmos(ImDrawList* drawList, const ChartViewport& vp,
                                          Strategy& strategy) override
@@ -156,19 +160,19 @@ namespace stnks
             StrategyInteraction result;
             ImGuiIO& io = ImGui::GetIO();
 
+            bool windowHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+
             float yEntry = vp.PriceToY(strategy.entryPrice);
             float yTP    = vp.PriceToY(strategy.takeProfit);
             float ySL    = vp.PriceToY(strategy.stopLoss);
 
             float right = vp.chartOrigin.x + vp.chartSize.x;
 
-            // --- Check if mouse hovers any of the full-width lines ---
-            bool lineHoveredTP    = IsHoveringLine(vp, yTP);
-            bool lineHoveredEntry = IsHoveringLine(vp, yEntry);
-            bool lineHoveredSL    = IsHoveringLine(vp, ySL);
+            bool lineHoveredTP    = windowHovered && IsHoveringLine(vp, yTP);
+            bool lineHoveredEntry = windowHovered && IsHoveringLine(vp, yEntry);
+            bool lineHoveredSL    = windowHovered && IsHoveringLine(vp, ySL);
             bool anyLineHovered   = lineHoveredTP || lineHoveredEntry || lineHoveredSL;
 
-            // Highlight hovered lines with a brighter redraw
             if (lineHoveredTP && !isDragging_)
                 drawList->AddLine(ImVec2(vp.chartOrigin.x, yTP), ImVec2(right, yTP),
                                   kTPHoverColor, 2.0f);
@@ -179,24 +183,22 @@ namespace stnks
                 drawList->AddLine(ImVec2(vp.chartOrigin.x, ySL), ImVec2(right, ySL),
                                   kSLHoverColor, 2.0f);
 
-            // --- Draw and interact with drag handles (buttons on the right) ---
             bool anyHandleHovered = false;
 
             anyHandleHovered |= DrawGizmoHandle(drawList, vp, yTP, kTPBorderColor, kTPHoverColor,
                                           strategy.takeProfit, strategy.TPPercent(),
-                                          "TP", DragTarget::TP);
+                                          "TP", DragTarget::TP, windowHovered);
 
             anyHandleHovered |= DrawGizmoHandle(drawList, vp, yEntry, kEntryColor, kEntryHoverColor,
                                           strategy.entryPrice, 0.f,
-                                          "Entry", DragTarget::Entry);
+                                          "Entry", DragTarget::Entry, windowHovered);
 
             anyHandleHovered |= DrawGizmoHandle(drawList, vp, ySL, kSLBorderColor, kSLHoverColor,
                                           strategy.stopLoss, strategy.SLPercent(),
-                                          "SL", DragTarget::SL);
+                                          "SL", DragTarget::SL, windowHovered);
 
             bool anyHovered = anyHandleHovered || anyLineHovered;
 
-            // --- Handle drag logic ---
             if (isDragging_)
             {
                 float newPrice = vp.YToPrice(io.MousePos.y);
@@ -216,7 +218,8 @@ namespace stnks
                     break;
                 }
                 case DragTarget::TP:
-                    // Clamp: Long TP must stay above entry, Short TP must stay below entry
+
+
                     if (isLong)
                         newPrice = std::max(newPrice, strategy.entryPrice + 0.01f);
                     else
@@ -224,7 +227,8 @@ namespace stnks
                     strategy.takeProfit = newPrice;
                     break;
                 case DragTarget::SL:
-                    // Clamp: Long SL must stay below entry, Short SL must stay above entry
+
+
                     if (isLong)
                         newPrice = std::min(newPrice, strategy.entryPrice - 0.01f);
                     else
@@ -236,7 +240,8 @@ namespace stnks
 
                 result.modified = true;
 
-                // Draw drag guide line
+
+
                 drawList->AddLine(
                     ImVec2(vp.chartOrigin.x, io.MousePos.y),
                     ImVec2(right, io.MousePos.y),
@@ -250,18 +255,21 @@ namespace stnks
             }
             else
             {
-                // Start drag on click — handles take priority, then lines
+
+
                 if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
                 {
                     if (anyHandleHovered)
                     {
                         isDragging_ = true;
-                        // activeTarget_ was set by DrawGizmoHandle
+
+
                     }
                     else if (anyLineHovered)
                     {
                         isDragging_ = true;
-                        // Pick the closest line if overlapping
+
+
                         if (lineHoveredTP)    activeTarget_ = DragTarget::TP;
                         if (lineHoveredEntry) activeTarget_ = DragTarget::Entry;
                         if (lineHoveredSL)    activeTarget_ = DragTarget::SL;
@@ -269,7 +277,8 @@ namespace stnks
                 }
             }
 
-            // --- R:R info panel ---
+
+
             {
                 float panelX = vp.chartOrigin.x + 8.f;
                 float panelY = std::min({yTP, yEntry, ySL}) - 32.f;
@@ -294,12 +303,14 @@ namespace stnks
                 drawList->AddText(ImVec2(panelX, panelY), IM_COL32(200, 200, 220, 255), infoBuf);
             }
 
-            // --- Action button bar (Confirm / Cancel / Delete) ---
+
+
             {
                 float btnY = std::max({yTP, yEntry, ySL}) + 8.f;
                 btnY = std::min(btnY, vp.chartOrigin.y + vp.chartSize.y - 28.f);
 
-                // Bar background
+
+
                 float barX = vp.chartOrigin.x + 4.f;
                 float barW = 216.f;
                 float barH = 26.f;
@@ -323,7 +334,8 @@ namespace stnks
                     "Delete", IM_COL32(180, 40, 40, 200), IM_COL32(230, 60, 60, 255));
             }
 
-            // Change cursor when hovering handles
+
+
             if (anyHovered || isDragging_)
                 ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
 
@@ -331,13 +343,11 @@ namespace stnks
         }
 
     private:
-        // ── Drag state ──────────────────────────────────────────────────────
 
         enum class DragTarget { None, Entry, TP, SL };
         DragTarget activeTarget_ = DragTarget::None;
         bool       isDragging_   = false;
 
-        // ── Constants ───────────────────────────────────────────────────────
 
         static constexpr float kHandleW = 90.f;
         static constexpr float kHandleH = 20.f;
@@ -359,12 +369,12 @@ namespace stnks
         static constexpr ImU32 kCancelledFill     = IM_COL32(100, 100, 100, 15);
         static constexpr ImU32 kLabelBgColor      = IM_COL32(30, 30, 40, 200);
 
-        // ── Gizmo handle drawing ────────────────────────────────────────────
 
         bool DrawGizmoHandle(ImDrawList* drawList, const ChartViewport& vp,
                              float y, ImU32 color, ImU32 hoverColor,
                              float price, float pct,
-                             const char* prefix, DragTarget target)
+                             const char* prefix, DragTarget target,
+                             bool windowHovered = true)
         {
             float x = vp.chartOrigin.x + 10.f;
             float hy = y - kHandleH * 0.5f;
@@ -372,7 +382,7 @@ namespace stnks
             ImVec2 min(x, hy);
             ImVec2 max(x + kHandleW, hy + kHandleH);
 
-            bool hovered = ImGui::IsMouseHoveringRect(min, max) && !isDragging_;
+            bool hovered = windowHovered && ImGui::IsMouseHoveringRect(min, max) && !isDragging_;
             bool active  = (activeTarget_ == target && isDragging_);
 
             ImU32 col = (hovered || active) ? hoverColor : color;
@@ -380,11 +390,11 @@ namespace stnks
                 ? IM_COL32(40, 40, 55, 240)
                 : IM_COL32(25, 25, 35, 220);
 
-            // Handle background
             drawList->AddRectFilled(min, max, bgCol, 4.f);
             drawList->AddRect(min, max, col, 4.f, 0, 1.5f);
 
-            // Grip dots (left side)
+
+
             float gripX = x + 8.f;
             for (int i = 0; i < 3; ++i)
             {
@@ -393,7 +403,8 @@ namespace stnks
                     (hovered || active) ? IM_COL32(255, 255, 255, 200) : IM_COL32(255, 255, 255, 80));
             }
 
-            // Price text — no symbol context here, use raw price (gizmo handles are compact)
+
+
             char buf[48];
             if (std::abs(pct) > 0.01f)
                 snprintf(buf, sizeof(buf), "%s %.2f (%+.2f%%)", prefix, price, pct);
@@ -405,20 +416,21 @@ namespace stnks
             float ty = hy + (kHandleH - textSz.y) * 0.5f;
             drawList->AddText(ImVec2(tx, ty), col, buf);
 
-            // Connecting line from handle to chart right edge
+
+
             float right = vp.chartOrigin.x + vp.chartSize.x;
             drawList->AddLine(ImVec2(x + kHandleW, y), ImVec2(right, y),
                 (hovered || active) ? col : IM_COL32(col & 0xFF, (col >> 8) & 0xFF, (col >> 16) & 0xFF, 40),
                 (hovered || active) ? 1.5f : 0.5f);
 
-            // Track hover for drag start
+
+
             if (hovered)
                 activeTarget_ = target;
 
             return hovered || active;
         }
 
-        // ── Button drawing ──────────────────────────────────────────────────
 
         bool DrawButton(ImDrawList* drawList, ImVec2 pos,
                         const char* label, ImU32 color, ImU32 hoverColor)
@@ -448,7 +460,6 @@ namespace stnks
             return clicked;
         }
 
-        // ── Helpers ─────────────────────────────────────────────────────────
 
         void DrawDashedLine(ImDrawList* drawList, ImVec2 a, ImVec2 b, ImU32 color,
                             float dashLen = 6.f, float gapLen = 4.f)

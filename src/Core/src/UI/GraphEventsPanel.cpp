@@ -36,7 +36,12 @@ namespace stnks
             snprintf(title, sizeof(title), "Graph Events###GraphEvents");
 
         if (!ImGui::Begin(title, open)) { ImGui::End(); return; }
+        DrawContent();
+        ImGui::End();
+    }
 
+    void GraphEventsPanel::DrawContent()
+    {
         // Toolbar
         if (ImGui::Button("Clear All"))
             ctx_.graphEvents->Clear();
@@ -67,7 +72,6 @@ namespace stnks
         {
             ImGui::TextDisabled("No events detected yet.");
             ImGui::TextDisabled("Events appear as charts are scanned for patterns.");
-            ImGui::End();
             return;
         }
 
@@ -92,7 +96,6 @@ namespace stnks
 
             ImGui::EndTable();
         }
-        ImGui::End();
     }
 
     void GraphEventsPanel::DrawEventRow(GraphEvent& ev, int evIdx)

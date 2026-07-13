@@ -45,10 +45,10 @@ namespace stnks
     //
     // Usage:
     //   WebhookReceiver receiver;
-    //   receiver.SetSecret("gbm", "my-hmac-secret");
-    //   receiver.RegisterHandler("gbm", "order.filled", [](const WebhookEvent& e) { ... });
+    //   receiver.SetSecret("broker", "my-hmac-secret");
+    //   receiver.RegisterHandler("broker", "order.filled", [](const WebhookEvent& e) { ... });
     //   receiver.Start(8101);
-    //   // Broker POSTs to http://your-server:8101/webhook/gbm
+    //   // Broker POSTs to http://your-server:8101/webhook/broker
     //   receiver.Stop();
     //
     // Endpoint format:

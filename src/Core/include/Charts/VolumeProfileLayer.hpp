@@ -37,14 +37,6 @@ namespace stnks
         float   confidence = 0.f;
     };
 
-    // Vertical Volume Profile layer — overlays horizontal volume bars on the
-    // main chart area, aggregated by price level.
-    //
-    // Hover: shows volume profile at cursor position with pattern detection.
-    // Click: pins a profile at that position (accumulates, builds a list).
-    // Right-click on pinned profile: removes it.
-    // Ctrl+Click: removes ALL pinned profiles.
-
     class VolumeProfileLayer : public ChartLayer
     {
     public:
@@ -60,18 +52,15 @@ namespace stnks
         float fullBarWidthPct  = 0.20f;
         float pinnedBarWidthPct = 0.25f;
 
-        // Cursor profile colors (subtle)
         ImU32 fullBullColor    = IM_COL32(38, 166, 91, 45);
         ImU32 fullBearColor    = IM_COL32(214, 48, 49, 45);
         ImU32 fullPocColor     = IM_COL32(255, 215, 0, 60);
 
-        // Pinned profile colors
         ImU32 pinnedBullColor  = IM_COL32(38, 166, 91, 100);
         ImU32 pinnedBearColor  = IM_COL32(214, 48, 49, 100);
         ImU32 pinnedPocColor   = IM_COL32(255, 215, 0, 110);
         ImU32 anchorLineColor  = IM_COL32(100, 140, 200, 100);
 
-        // Pattern zone colors
         ImU32 pShapeFill       = IM_COL32(38, 166, 91, 25);
         ImU32 pShapeBorder     = IM_COL32(38, 166, 91, 120);
         ImU32 dShapeFill       = IM_COL32(214, 48, 49, 25);
@@ -94,7 +83,6 @@ namespace stnks
                 io.MousePos.y >= vp.chartOrigin.y &&
                 io.MousePos.y <= vp.chartOrigin.y + vp.chartSize.y;
 
-            // ── 1. Cursor-following profile at hovered candle ─────────────────
             if (inChartArea && vp.focusedCandle >= 0)
             {
                 int anchor = vp.focusedCandle;
@@ -122,15 +110,12 @@ namespace stnks
                 }
             }
 
-            // ── 2. Click interactions ─────────────────────────────────────────
             if (inChartArea && vp.focusedCandle >= 0)
             {
-                // Left click: add a new pin (always accumulates)
                 if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyShift && !io.KeyAlt)
                 {
                     if (io.KeyCtrl)
                     {
-                        // Ctrl+Click: clear all pins
                         pinnedCandles_.clear();
                     }
                     else
@@ -139,7 +124,6 @@ namespace stnks
                     }
                 }
 
-                // Right click on a pinned profile: remove it
                 if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
                 {
                     int removeIdx = FindHoveredPin(vp, data, io.MousePos);
@@ -148,13 +132,11 @@ namespace stnks
                 }
             }
 
-            // Clean up out-of-range pins
             pinnedCandles_.erase(
                 std::remove_if(pinnedCandles_.begin(), pinnedCandles_.end(),
                     [&](int idx) { return idx < 0 || idx >= (int)data.candles.size(); }),
                 pinnedCandles_.end());
 
-            // ── 3. Draw pinned profiles ───────────────────────────────────────
             int hoveredPinIdx = hovered ? FindHoveredPin(vp, data, io.MousePos) : -1;
 
             for (int p = 0; p < (int)pinnedCandles_.size(); ++p)
@@ -171,7 +153,6 @@ namespace stnks
                 float maxBarW = vp.chartSize.x * pinnedBarWidthPct;
                 bool isHovered = (p == hoveredPinIdx);
 
-                // Anchor line
                 ImU32 lineCol = isHovered
                     ? IM_COL32(180, 200, 255, 200)
                     : anchorLineColor;
@@ -180,16 +161,13 @@ namespace stnks
                     ImVec2(anchorX, vp.chartOrigin.y + vp.chartSize.y),
                     lineCol, isHovered ? 1.5f : 1.f);
 
-                // Volume bars (no edge outlines, no highlight overlay)
                 DrawBars(drawList, vp, buckets, anchorX, maxBarW,
                          pinnedBullColor, pinnedBearColor, pinnedPocColor);
 
-                // Pattern detection + visualization
                 VPPattern pat = DetectPattern(buckets);
                 if (pat.shape != VPShape::None)
                     DrawPatternZone(drawList, vp, pat, anchorX, maxBarW, true);
 
-                // Label with remove hint on hover
                 char label[96];
                 if (pat.shape != VPShape::None)
                     snprintf(label, sizeof(label), "VP [%d] %s %.0f%%",
@@ -204,7 +182,6 @@ namespace stnks
                 float labelY = vp.chartOrigin.y + 2.f + (float)p * 16.f;
                 DrawSmallLabel(drawList, ImVec2(anchorX + 2.f, labelY), labelCol, label);
 
-                // Show remove hint when hovered
                 if (isHovered)
                 {
                     DrawSmallLabel(drawList,
@@ -373,8 +350,12 @@ namespace stnks
             float yVAH = vp.PriceToY(pat.vahPrice);
             float yVAL = vp.PriceToY(pat.valPrice);
             float yPOC = vp.PriceToY(pat.pocPrice);
+
             float leftX  = anchorX;
-            float rightX = anchorX + maxBarW;
+            float chartRight = vp.chartOrigin.x + vp.chartSize.x;
+            if (leftX + maxBarW > chartRight)
+                leftX = chartRight - maxBarW;
+            float rightX = leftX + maxBarW;
 
             drawList->AddRectFilled(
                 ImVec2(leftX, yVAH), ImVec2(rightX, yVAL), fillCol);
@@ -400,7 +381,7 @@ namespace stnks
                 snprintf(badgeBuf, sizeof(badgeBuf), "%s (%.0f%%)",
                          VPShapeName(pat.shape), pat.confidence * 100.f);
                 ImVec2 textSz = ImGui::CalcTextSize(badgeBuf);
-                float badgeX = anchorX + (maxBarW - textSz.x) * 0.5f - 4.f;
+                float badgeX = leftX + (maxBarW - textSz.x) * 0.5f - 4.f;
                 float badgeY = std::max(yVAH - 20.f, vp.chartOrigin.y + 2.f);
 
                 drawList->AddRectFilled(
@@ -416,7 +397,6 @@ namespace stnks
             }
         }
 
-        // Draw volume bars — clean filled rects only, no edge outlines
         void DrawBars(ImDrawList* drawList, const ChartViewport& vp,
                       const std::vector<Bucket>& buckets,
                       float leftX, float maxBarW,
@@ -430,6 +410,10 @@ namespace stnks
                 if (t > maxVol) { maxVol = t; pocIdx = b; }
             }
             if (maxVol <= 0.f) return;
+
+            float chartRight = vp.chartOrigin.x + vp.chartSize.x;
+            if (leftX + maxBarW > chartRight)
+                leftX = chartRight - maxBarW;
 
             for (int b = 0; b < (int)buckets.size(); ++b)
             {
@@ -459,12 +443,16 @@ namespace stnks
                            ImVec2 mousePos) const
         {
             float maxBarW = vp.chartSize.x * pinnedBarWidthPct;
+            float chartRight = vp.chartOrigin.x + vp.chartSize.x;
             for (int p = 0; p < (int)pinnedCandles_.size(); ++p)
             {
                 int anchor = pinnedCandles_[p];
                 int relIdx = anchor - vp.visibleStart;
                 float anchorX = vp.IndexToX(relIdx) + vp.candleWidth * 0.5f;
-                if (mousePos.x >= anchorX && mousePos.x <= anchorX + maxBarW &&
+                float leftX = anchorX;
+                if (leftX + maxBarW > chartRight)
+                    leftX = chartRight - maxBarW;
+                if (mousePos.x >= leftX && mousePos.x <= leftX + maxBarW &&
                     mousePos.y >= vp.chartOrigin.y &&
                     mousePos.y <= vp.chartOrigin.y + vp.chartSize.y)
                     return p;

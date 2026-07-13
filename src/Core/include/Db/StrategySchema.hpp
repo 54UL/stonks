@@ -1,15 +1,5 @@
 #pragma once
 
-// StrategySchema — single source of truth for the Strategy <-> DB mapping.
-//
-// Adding a new persisted field:
-//   1. Add member to Strategy struct (Strategy.hpp)
-//   2. Add a Col() entry below
-//   3. Create a migration file: db/migrations/NNN_description.sql
-//
-// That's it. INSERT, UPDATE, SELECT, CREATE TABLE, bind, and read are all
-// derived automatically from the schema definition + member pointers.
-
 #include <Strategy/Strategy.hpp>
 #include <Db/DbStore.hpp>
 

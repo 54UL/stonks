@@ -15,7 +15,6 @@
 
 namespace stnks
 {
-    // ── ENet Protocol ───────────────────────────────────────────────────────────
 
     // Channel assignments
     enum NetChannel : uint8_t
@@ -59,7 +58,6 @@ namespace stnks
     };
     #pragma pack(pop)
 
-    // ── Tick data received by client ────────────────────────────────────────────
 
     struct MarketTick
     {
@@ -72,7 +70,6 @@ namespace stnks
         int64_t     timestamp = 0;
     };
 
-    // ── Configuration ───────────────────────────────────────────────────────────
 
     struct NetFeedConfig
     {
@@ -80,7 +77,6 @@ namespace stnks
         int      maxClients = 8;       // Max connected UI clients
     };
 
-    // ── Connection state (mirrors 80CC pattern) ─────────────────────────────────
 
     enum class NetState
     {
@@ -102,7 +98,6 @@ namespace stnks
         return "Unknown";
     }
 
-    // ── Server-side: ENet host broadcasting market data ─────────────────────────
 
     class MarketFeedServer
     {
@@ -135,7 +130,6 @@ namespace stnks
         std::atomic<int>    clientCount_{0};
     };
 
-    // ── Client-side: ENet client receiving market data ──────────────────────────
 
     class MarketFeedClient
     {

@@ -1,13 +1,6 @@
 #!/usr/bin/env bash
-# ============================================================================
-# STNKS Database Seeder
-# Applies all migrations and (optionally) seeds to a SQLite database file.
-#
-# Usage:
-#   ./dev_env/seed_db.sh                          # default: app/strategies.db
-#   ./dev_env/seed_db.sh path/to/my.db            # custom path
-#   ./dev_env/seed_db.sh path/to/my.db --no-seed  # migrations only
-# ============================================================================
+# Apply migrations and optionally seed a SQLite database.
+# Usage: ./dev_env/seed_db.sh [db_path] [--no-seed]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

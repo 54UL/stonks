@@ -115,7 +115,6 @@ namespace stnks
         running_ = false;
     }
 
-    // ── Core logic ──────────────────────────────────────────────────────────────
 
     void StrategyServer::PollAndCheck()
     {

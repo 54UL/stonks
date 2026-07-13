@@ -20,7 +20,6 @@ namespace stnks
                                         const std::string& serverUrl = "http://localhost:8099");
         ~RemoteStrategyService() override;
 
-        // ── IStrategyService ─────────────────────────────────────────────────
 
         int64_t               InsertStrategy(const Strategy& s) override;
         bool                  UpdateStrategy(const Strategy& s) override;
@@ -41,7 +40,6 @@ namespace stnks
         bool IsMonitoring() const override;
         std::string GetServerUrl() const override { return serverUrl_; }
 
-        // ── ENet market feed ─────────────────────────────────────────────────
 
         // Get real-time price from ENet feed (0 if no data yet)
         float GetLivePrice(const std::string& symbol) const;

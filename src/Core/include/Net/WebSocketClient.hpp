@@ -36,7 +36,6 @@ namespace stnks
         WebSocketClient(const WebSocketClient&) = delete;
         WebSocketClient& operator=(const WebSocketClient&) = delete;
 
-        // ── IWebSocketClient ──────────────────────────────────────────────────────
 
         void Connect(const WsConfig& config) override;
         void Disconnect() override;

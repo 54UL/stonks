@@ -6,13 +6,13 @@
 
 namespace stnks
 {
-    // Dummy GBM broker REST API action.
+    // Generic broker REST API action.
     //
     // Simulates placing orders through a broker's HTTP API.
     // When a real API key is available, replace the dummy endpoints
-    // with actual GBM+ (or any broker) API calls.
+    // with actual broker API calls.
     //
-    // Expected GBM-style endpoints:
+    // Expected endpoints:
     //   POST /api/v1/orders          - place a market order
     //   GET  /api/v1/orders/{id}     - check order status
     //   DELETE /api/v1/orders/{id}   - cancel an order
@@ -22,14 +22,14 @@ namespace stnks
     public:
         struct Config
         {
-            std::string baseUrl = "https://api.gbm.com";  // Placeholder
+            std::string baseUrl = "https://api.broker.com";  // Placeholder
             std::string apiKey;                             // Empty = dry-run mode
             std::string accountId;
         };
 
         BrokerAction(HttpClient& http, const Config& config);
 
-        std::string Name() const override { return "BrokerAction (GBM)"; }
+        std::string Name() const override { return "BrokerAction"; }
         bool Execute(const StrategyTriggerEvent& event) override;
         bool Validate() override;
 

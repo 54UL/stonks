@@ -21,7 +21,6 @@ namespace stnks
         Disconnect();
     }
 
-    // ── Helpers ─────────────────────────────────────────────────────────────────
 
     std::string BinanceBrokerConnector::ToLower(const std::string& s)
     {
@@ -146,7 +145,6 @@ namespace stnks
         return "180";
     }
 
-    // ── Lifecycle ────────────────────────────────────────────────────────────────
 
     void BinanceBrokerConnector::Initialize(const BrokerConfig& config)
     {
@@ -234,7 +232,6 @@ namespace stnks
         return marketWs_.GetState();
     }
 
-    // ── User Data Stream ────────────────────────────────────────────────────────
 
     bool BinanceBrokerConnector::StartUserDataStream()
     {
@@ -272,7 +269,6 @@ namespace stnks
         http_.Put(url, "", GetAuthHeaders());
     }
 
-    // ── Market data ──────────────────────────────────────────────────────────────
 
     void BinanceBrokerConnector::SubscribePrice(const std::string& symbol)
     {
@@ -362,7 +358,6 @@ namespace stnks
         return {};
     }
 
-    // ── IBrokerDataSource ────────────────────────────────────────────────────────
 
     float BinanceBrokerConnector::FetchCurrentPrice(const std::string& symbol)
     {
@@ -480,7 +475,6 @@ namespace stnks
         return results;
     }
 
-    // ── Order execution ──────────────────────────────────────────────────────────
 
     BrokerOrder BinanceBrokerConnector::PlaceOrder(const std::string& symbol,
                                                     OrderSide side, OrderType type,
@@ -625,7 +619,6 @@ namespace stnks
         return orders;
     }
 
-    // ── Account ──────────────────────────────────────────────────────────────────
 
     BrokerBalance BinanceBrokerConnector::GetBalance()
     {
@@ -691,7 +684,6 @@ namespace stnks
         return positions;
     }
 
-    // ── Event callbacks ──────────────────────────────────────────────────────────
 
     void BinanceBrokerConnector::SetOnTick(OnTickCallback cb)
     {
@@ -733,7 +725,6 @@ namespace stnks
         return ticksReceived_.load(std::memory_order_relaxed);
     }
 
-    // ── WebSocket message handlers ───────────────────────────────────────────────
 
     void BinanceBrokerConnector::HandleMarketWsMessage(const std::string& data)
     {
@@ -859,7 +850,6 @@ namespace stnks
         }
     }
 
-    // ── JSON parsers ─────────────────────────────────────────────────────────────
 
     BrokerOrder BinanceBrokerConnector::ParseOrderJson(const nlohmann::json& j) const
     {

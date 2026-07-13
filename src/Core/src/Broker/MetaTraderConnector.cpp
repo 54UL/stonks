@@ -15,7 +15,6 @@ namespace stnks
         Disconnect();
     }
 
-    // ── Lifecycle ────────────────────────────────────────────────────────────────
 
     void MetaTraderConnector::Initialize(const BrokerConfig& config)
     {
@@ -85,7 +84,6 @@ namespace stnks
         return ws_.GetState();
     }
 
-    // ── Market data ──────────────────────────────────────────────────────────────
 
     void MetaTraderConnector::SubscribePrice(const std::string& symbol)
     {
@@ -126,7 +124,6 @@ namespace stnks
         return {};
     }
 
-    // ── IBrokerDataSource ────────────────────────────────────────────────────────
 
     float MetaTraderConnector::FetchCurrentPrice(const std::string& symbol)
     {
@@ -236,7 +233,6 @@ namespace stnks
         return results;
     }
 
-    // ── Order execution ──────────────────────────────────────────────────────────
 
     const char* MetaTraderConnector::MT5ActionString(OrderSide side, OrderType type)
     {
@@ -352,7 +348,6 @@ namespace stnks
         return orders;
     }
 
-    // ── Account ──────────────────────────────────────────────────────────────────
 
     BrokerBalance MetaTraderConnector::GetBalance()
     {
@@ -402,7 +397,6 @@ namespace stnks
         return positions;
     }
 
-    // ── Event callbacks ──────────────────────────────────────────────────────────
 
     void MetaTraderConnector::SetOnTick(OnTickCallback cb) { std::lock_guard<std::mutex> lock(cbMutex_); onTick_ = std::move(cb); }
     void MetaTraderConnector::SetOnOrder(OnOrderCallback cb) { std::lock_guard<std::mutex> lock(cbMutex_); onOrder_ = std::move(cb); }
@@ -413,7 +407,6 @@ namespace stnks
     float MetaTraderConnector::GetLatencyMs() const { return ws_.GetLatencyMs(); }
     uint64_t MetaTraderConnector::GetTicksReceived() const { return ticksReceived_.load(std::memory_order_relaxed); }
 
-    // ── Private ──────────────────────────────────────────────────────────────────
 
     std::string MetaTraderConnector::GetAuthHeader() const
     {

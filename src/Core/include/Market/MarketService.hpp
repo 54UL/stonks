@@ -52,6 +52,10 @@ namespace stnks
         // Add a market data source. The first source added becomes the active one.
         void AddSource(std::unique_ptr<IMarketSource> source);
 
+        // Remove a source by name. Disconnects if it's a broker connector.
+        // Returns true if found and removed.
+        bool RemoveSource(const std::string& name);
+
         // Switch the active source by name (returns false if not found)
         bool SetActiveSource(const std::string& name);
 
@@ -62,13 +66,12 @@ namespace stnks
         // Get the active source as IBrokerDataSource (nullptr if not a broker source)
         IBrokerDataSource* GetActiveBrokerSource() const;
 
-        // Find a broker source by name (e.g., "Binance", "GBM+"). Returns nullptr if not found.
+        // Find a broker source by name (e.g., "Binance", "MT5"). Returns nullptr if not found.
         IBrokerDataSource* FindBrokerSource(const std::string& name) const;
 
         // Get the Yahoo Finance fallback source (always the first source registered).
         IMarketSource* GetFallbackSource() const;
 
-        // ── Real-time price cache ─────────────────────────────────────────────────
 
         // Read cached price — lock-free, safe to call every frame from UI thread.
         // Returns 0.f if no cached price available.
@@ -90,7 +93,6 @@ namespace stnks
         // Check if a symbol is being polled in real-time.
         bool IsRealtimePolling(const std::string& symbol) const;
 
-        // ── Synchronous operations ────────────────────────────────────────────────
 
         StockQuote FetchQuote(const std::string& symbol,
                               const std::string& interval = "1d",
@@ -98,7 +100,6 @@ namespace stnks
 
         std::vector<SymbolMatch> SearchSymbols(const std::string& query);
 
-        // ── Async operations ──────────────────────────────────────────────────────
 
         void FetchQuoteAsync(const std::string& symbol,
                              const std::string& interval = "1d",

@@ -20,42 +20,26 @@ namespace stnks
     public:
         StrategyLayer() { name = "Strategies"; }
 
-        // Strategies set externally from UI each frame
         std::vector<Strategy> strategies;
 
-        // Callback fired when a strategy is created or modified via gizmo/wizard.
-        // bool isNew: true=insert, false=update
         std::function<void(const Strategy&, bool isNew)> onStrategyChanged;
-
-        // Callback fired when a strategy is cancelled/deleted via gizmo
         std::function<void(int64_t id)> onStrategyCancelled;
-
-        // Callback fired when a strategy gizmo is selected (click to edit).
         std::function<void(int64_t id)> onStrategySelected;
-
-        // Callback fired when editing is dismissed via Cancel
         std::function<void()> onEditingDismissed;
 
-        // Callback fired when user wants to create a strategy via context menu.
-        // If set, context menu routes here instead of opening the layer wizard overlay.
-        // Args: (symbol, type, direction, priceAtClick, visiblePriceRange)
+        // If set, context menu routes here instead of opening the layer wizard overlay
         std::function<void(const std::string&, StrategyType, StrategyDirection, float, float)> onCreateRequested;
 
-        // Currently selected/editing strategy ID
         int64_t GetEditingId() const { return editingId_; }
 
-        // Access the wizard (UI uses this for the "+ Position" button etc.)
         StrategyWizard& GetWizard() { return wizard_; }
         const StrategyWizard& GetWizard() const { return wizard_; }
 
-        // Set current price for position P&L rendering
         void SetCurrentPrice(float price) { posRenderer_.SetCurrentPrice(price); }
 
-        // Highlight a strategy on the chart (from table row hover)
         void SetHighlightedId(int64_t id) { highlightedId_ = id; }
         int64_t GetHighlightedId() const { return highlightedId_; }
 
-        // ── Context menu ────────────────────────────────────────────────────
 
         void OpenContextMenu(float priceAtClick, const std::string& symbol)
         {
@@ -101,14 +85,12 @@ namespace stnks
             }
         }
 
-        // ── State queries ───────────────────────────────────────────────────
 
         bool IsEditing() const { return wizard_.IsOpen() || editingId_ > 0; }
         bool HasPending() const { return wizard_.IsCreating(); }
 
         void StartEditing(int64_t id)
         {
-            // Find the strategy and open wizard in edit mode
             for (auto& s : strategies)
             {
                 if (s.id == id)
@@ -127,7 +109,6 @@ namespace stnks
             wizard_.Close();
         }
 
-        // ── Draw ────────────────────────────────────────────────────────────
 
         void Draw(ImDrawList* drawList, const ChartViewport& vp,
                   const StockQuote& data) override
@@ -135,8 +116,7 @@ namespace stnks
             lastVisibleRange_ = vp.priceMax - vp.priceMin;
             const std::vector<Candle>* candles = data.candles.empty() ? nullptr : &data.candles;
 
-            // --- Compute mini-bar Y offsets for overlap stacking ---
-            // Collect entry Y positions for non-editing active strategies
+            // Compute mini-bar Y offsets to stack overlapping bars
             struct MiniBarSlot { int idx; float baseY; float offset; };
             std::vector<MiniBarSlot> miniSlots;
             for (int i = 0; i < (int)strategies.size(); ++i)
@@ -146,7 +126,6 @@ namespace stnks
                 float yEntry = vp.PriceToY(s.entryPrice);
                 miniSlots.push_back({i, yEntry, 0.f});
             }
-            // Sort by Y position, then stack overlapping bars
             std::sort(miniSlots.begin(), miniSlots.end(),
                 [](const MiniBarSlot& a, const MiniBarSlot& b) { return a.baseY < b.baseY; });
             const float kBarH = 18.f;
@@ -158,14 +137,12 @@ namespace stnks
                 if (thisTop < prevBottom)
                     miniSlots[i].offset = prevBottom - miniSlots[i].baseY + kBarH * 0.5f;
             }
-            // Build offset lookup: strategy index → offset
             std::vector<float> miniBarOffsets(strategies.size(), 0.f);
             for (auto& slot : miniSlots)
                 miniBarOffsets[slot.idx] = slot.offset;
 
-            // --- Draw all existing strategies ---
-            int64_t deleteId = -1;  // Deferred delete (avoid modifying while iterating)
-            int64_t selectId = -1;  // Deferred select
+            int64_t deleteId = -1;
+            int64_t selectId = -1;
 
             for (int i = 0; i < (int)strategies.size(); ++i)
             {
@@ -174,7 +151,6 @@ namespace stnks
                 bool isEditing = (s.id == editingId_);
                 bool isHighlighted = (s.id == highlightedId_ && !isEditing);
 
-                // Draw highlight glow behind the strategy
                 if (isHighlighted)
                 {
                     float yEntry = vp.PriceToY(s.entryPrice);
@@ -203,7 +179,6 @@ namespace stnks
 
                 if (isEditing && wizard_.IsEditing())
                 {
-                    // Gizmos operate on the wizard's strategy copy
                     Strategy& wizStrat = wizard_.GetStrategy();
                     auto interaction = renderer->HandleGizmos(drawList, vp, wizStrat);
 
@@ -255,7 +230,6 @@ namespace stnks
                 }
                 else if (editingId_ != s.id && s.IsActive())
                 {
-                    // Draw mini-bar for non-editing active strategies
                     auto interaction = renderer->DrawMiniBar(drawList, vp, s, miniBarOffsets[i]);
 
                     if (interaction.deleted)
@@ -265,7 +239,6 @@ namespace stnks
                 }
             }
 
-            // Process deferred delete
             if (deleteId >= 0)
             {
                 if (editingId_ == deleteId)
@@ -277,7 +250,6 @@ namespace stnks
                     onStrategyCancelled(deleteId);
             }
 
-            // Process deferred select
             if (selectId >= 0 && deleteId < 0)
             {
                 for (auto& s : strategies)
@@ -287,12 +259,10 @@ namespace stnks
                         editingId_ = s.id;
                         if (onStrategySelected)
                         {
-                            // Route to UI-level dockable wizard; don't open layer overlay
                             onStrategySelected(s.id);
                         }
                         else
                         {
-                            // Fallback: open layer overlay wizard
                             wizard_.OpenEdit(s);
                         }
                         break;
@@ -300,7 +270,6 @@ namespace stnks
                 }
             }
 
-            // Draw pending (wizard creating new) with gizmos
             if (wizard_.IsCreating())
             {
                 Strategy& pending = wizard_.GetStrategy();
@@ -323,8 +292,6 @@ namespace stnks
             DrawContextMenu(vp);
         }
 
-        // Draw the wizard overlay UI. Call AFTER the chart child is drawn.
-        // This is separate from Draw() because it needs ImGui widget context.
         void DrawWizard(const ImVec2& chartMin, const ImVec2& chartMax,
                         int focusedCandle, int totalCandles,
                         const std::vector<Candle>* candles)
@@ -333,21 +300,18 @@ namespace stnks
 
             wizard_.Draw(chartMin, chartMax, focusedCandle, totalCandles, candles);
 
-            // Handle wizard results
             if (wizard_.WasConfirmed())
             {
                 Strategy result = wizard_.GetStrategy();
 
                 if (editingId_ > 0)
                 {
-                    // Edit mode: update existing
                     result.id = editingId_;
                     if (onStrategyChanged)
                         onStrategyChanged(result, false);
                 }
                 else
                 {
-                    // Create mode: insert new
                     if (onStrategyChanged)
                         onStrategyChanged(result, true);
                 }
@@ -369,13 +333,11 @@ namespace stnks
         PositionRenderer posRenderer_;
         StrategyWizard   wizard_;
 
-        // Context menu state
         float       contextMenuPrice_  = 0.f;
         float       lastVisibleRange_  = 0.f;
         std::string contextMenuSymbol_;
         bool        contextMenuOpen_   = false;
 
-        // Editing / highlight state
         int64_t editingId_     = -1;
         int64_t highlightedId_ = -1;
 
@@ -395,12 +357,10 @@ namespace stnks
         {
             if (onCreateRequested)
             {
-                // Route to UI-level dockable wizard
                 onCreateRequested(contextMenuSymbol_, type, direction, contextMenuPrice_, lastVisibleRange_);
             }
             else
             {
-                // Fallback: open layer overlay wizard
                 wizard_.OpenCreate(contextMenuSymbol_, type, direction, contextMenuPrice_, lastVisibleRange_);
             }
             editingId_ = -1;

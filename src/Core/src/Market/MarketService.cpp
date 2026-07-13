@@ -1,5 +1,6 @@
 #include <Market/MarketService.hpp>
 #include <Market/YahooFinanceSource.hpp>
+#include <Broker/IBrokerConnector.hpp>
 #include <spdlog/spdlog.h>
 #include <thread>
 #include <chrono>
@@ -26,7 +27,6 @@ namespace stnks
                 active = false;
         }
 
-        // Wait for all polling threads to exit (up to 12s for in-flight HTTP + sleep)
         int remaining = pollingThreadCount_.load();
         if (remaining > 0)
         {
@@ -51,6 +51,33 @@ namespace stnks
         spdlog::info("[MarketService] Added source: {} (realtime={})",
                      source->GetName(), source->IsRealtime());
         sources_.push_back(std::move(source));
+    }
+
+    bool MarketService::RemoveSource(const std::string& name)
+    {
+        for (auto it = sources_.begin(); it != sources_.end(); ++it)
+        {
+            if (name == (*it)->GetName())
+            {
+                // Disconnect if it's a broker connector
+                auto* connector = dynamic_cast<IBrokerConnector*>(it->get());
+                if (connector)
+                    connector->Disconnect();
+
+                size_t idx = static_cast<size_t>(it - sources_.begin());
+                sources_.erase(it);
+
+                // Fix activeSourceIdx_ if it was pointing at or past the removed slot
+                if (activeSourceIdx_ >= sources_.size())
+                    activeSourceIdx_ = 0;
+                else if (activeSourceIdx_ > idx)
+                    --activeSourceIdx_;
+
+                spdlog::info("[MarketService] Removed source: {}", name);
+                return true;
+            }
+        }
+        return false;
     }
 
     bool MarketService::SetActiveSource(const std::string& name)
@@ -97,7 +124,6 @@ namespace stnks
         return sources_[0].get();
     }
 
-    // ── Real-time price cache ──────────────────────────────────────────────────
 
     PriceCacheEntry* MarketService::GetOrCreateCacheEntry(const std::string& symbol)
     {
@@ -138,20 +164,18 @@ namespace stnks
         {
             std::lock_guard<std::mutex> lock(pollingMutex_);
             if (pollingActive_[symbol])
-                return; // Already polling
+                return;
             pollingActive_[symbol] = true;
         }
 
         auto* entry = GetOrCreateCacheEntry(symbol);
 
-        // Spawn a background thread that polls at ~1s intervals
         threads_.Submit([this, symbol, entry]() {
             pollingThreadCount_.fetch_add(1);
             spdlog::info("[MarketService] RT polling started for {}", symbol);
 
             while (true)
             {
-                // Check if we should stop
                 {
                     std::lock_guard<std::mutex> lock(pollingMutex_);
                     auto it = pollingActive_.find(symbol);
@@ -161,14 +185,12 @@ namespace stnks
 
                 float price = 0.f;
 
-                // Try broker source first (fast, single-price endpoint)
                 auto* broker = GetActiveBrokerSource();
                 if (broker)
                 {
                     price = broker->FetchCurrentPrice(symbol);
                 }
 
-                // Fallback: try all registered broker sources
                 if (price <= 0.f)
                 {
                     for (auto& src : sources_)
@@ -182,7 +204,6 @@ namespace stnks
                     }
                 }
 
-                // Last resort: quick 1m fetch from fallback (Yahoo)
                 if (price <= 0.f)
                 {
                     auto* fallback = GetFallbackSource();
@@ -199,7 +220,6 @@ namespace stnks
 
                 entry->timestamp.store(std::time(nullptr), std::memory_order_relaxed);
 
-                // Sleep ~1s between polls (broker sources may be faster)
                 std::this_thread::sleep_for(std::chrono::milliseconds(broker ? 500 : 2000));
             }
 
@@ -214,7 +234,6 @@ namespace stnks
         pollingActive_[symbol] = false;
     }
 
-    // ── Synchronous operations ───────────────────────────────────────────────────
 
     StockQuote MarketService::FetchQuote(const std::string& symbol,
                                          const std::string& interval,
@@ -229,11 +248,9 @@ namespace stnks
             return empty;
         }
 
-        // Try the active source first (could be a broker with candle support)
         auto quote = source->FetchQuote(symbol, interval, range);
 
-        // If the active source returned no candles (broker without history support),
-        // fall back to Yahoo Finance for chart data
+        // Fall back to Yahoo if active source returned no candles (e.g. broker without history)
         if (quote.candles.empty() && source != GetFallbackSource())
         {
             auto* fallback = GetFallbackSource();
@@ -245,7 +262,6 @@ namespace stnks
             }
         }
 
-        // Update price cache with latest candle close
         if (!quote.candles.empty())
             UpdatePriceCache(symbol, quote.candles.back().close);
 
@@ -259,14 +275,12 @@ namespace stnks
 
         auto results = source->SearchSymbols(query);
 
-        // Tag results with source name
         for (auto& r : results)
         {
             if (r.source.empty())
                 r.source = source->GetName();
         }
 
-        // If the active source is a broker, also search the fallback for broader coverage
         if (results.size() < 5 && source != GetFallbackSource())
         {
             auto* fallback = GetFallbackSource();
@@ -275,7 +289,6 @@ namespace stnks
                 auto fallbackResults = fallback->SearchSymbols(query);
                 for (auto& r : fallbackResults)
                 {
-                    // Avoid duplicates
                     bool exists = false;
                     for (auto& existing : results)
                     {
@@ -294,7 +307,6 @@ namespace stnks
         return results;
     }
 
-    // ── Async operations ─────────────────────────────────────────────────────────
 
     void MarketService::FetchQuoteAsync(const std::string& symbol,
                                          const std::string& interval,

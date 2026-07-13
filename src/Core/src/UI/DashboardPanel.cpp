@@ -107,7 +107,6 @@ namespace stnks
             return;
         }
 
-        // ── Connection panel ──────────────────────────────────────────────
         ImGui::Spacing();
 
         ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -243,7 +242,6 @@ namespace stnks
                 ctx_.recommendations->size(), ctx_.warnings->size(), ctx_.operations->size());
     }
 
-    // ── Systems ─────────────────────────────────────────────────────────────────
 
     void DashboardPanel::DrawSystems()
     {
@@ -325,8 +323,6 @@ namespace stnks
         ImGui::TextDisabled("Brokers");
         drawSystem("Binance",           t.binance,         "BINANCE_API_KEY",
                    ImVec4(0.96f, 0.78f, 0.15f, 1.f), "Binance spot trading & real-time data");
-        drawSystem("GBM+",             t.gbm,             "GBM_CLIENT_ID",
-                   ImVec4(0.2f, 0.5f, 0.9f, 1.f),   "GBM+ (BMV Mexico) trading & data");
         drawSystem("MetaTrader 5",      t.metaTrader,      "MT5_API_KEY",
                    ImVec4(0.3f, 0.75f, 0.3f, 1.f),  "MetaTrader 5 via MetaApi bridge");
 
@@ -393,7 +389,6 @@ namespace stnks
         ImGui::Spacing();
     }
 
-    // ── Data Config ──────────────────────────────────────────────────────────────
 
     void DashboardPanel::DrawDataConfig()
     {
@@ -416,7 +411,6 @@ namespace stnks
         ImGui::Text("Connected: %s", ctx_.service->IsConnected() ? "Yes" : "No");
     }
 
-    // ── Environment ─────────────────────────────────────────────────────────────
 
     void DashboardPanel::DrawEnvironment()
     {
@@ -432,8 +426,10 @@ namespace stnks
             {
                 auto& buf = envEditBuffers_[key];
                 std::memset(buf.data, 0, sizeof(buf.data));
-                const char* val = std::getenv(key.c_str());
-                if (val) std::strncpy(buf.data, val, sizeof(buf.data) - 1);
+                // Use Get() which reads overridden value (e.g. from .env) or std::getenv
+                std::string val = env.Get(key);
+                if (!val.empty())
+                    std::strncpy(buf.data, val.c_str(), sizeof(buf.data) - 1);
             }
             envBuffersInit_ = true;
         }
@@ -445,8 +441,6 @@ namespace stnks
         EnvGroup groups[] = {
             {"AI & News", {"CLAUDE_API_KEY", "GNEWS_API_KEY"}},
             {"Binance",   {"BINANCE_API_KEY", "BINANCE_API_SECRET", "BINANCE_SANDBOX"}},
-            {"GBM+",      {"GBM_CLIENT_ID", "GBM_CLIENT_SECRET", "GBM_REFRESH_TOKEN",
-                           "GBM_ACCOUNT_ID", "GBM_SANDBOX"}},
             {"MetaTrader", {"MT5_API_KEY", "MT5_ACCOUNT_ID"}},
             {"General",    {"STNKS_SERVER_URL", "ASSETS_STNKS"}},
         };
@@ -515,12 +509,27 @@ namespace stnks
                         entry.overridden ? ImVec4(0.15f, 0.13f, 0.05f, 1.f)
                                          : ImVec4(0.08f, 0.10f, 0.16f, 1.f));
 
-                    if (ImGui::InputText("##val", buf.data, sizeof(buf.data),
-                                         ImGuiInputTextFlags_EnterReturnsTrue))
+                    ImGui::InputText("##val", buf.data, sizeof(buf.data));
+
+                    // Fires on Enter, Tab, or click-away after editing
+                    if (ImGui::IsItemDeactivatedAfterEdit())
                     {
                         entry.value = buf.data;
                         entry.overridden = true;
                         ctx_.PushToast(std::string(key) + " updated", ui::kToastInfo, 3.f);
+
+                        // Persist to .env file
+                        if (ctx_.saveEnv) ctx_.saveEnv();
+
+                        // Re-wire broker connector if a broker credential changed
+                        if (ctx_.wireBroker)
+                        {
+                            std::string k(key);
+                            if (k.rfind("BINANCE_", 0) == 0)
+                                ctx_.wireBroker("Binance");
+                            else if (k.rfind("MT5_", 0) == 0)
+                                ctx_.wireBroker("MetaTrader 5");
+                        }
                     }
 
                     ImGui::PopStyleColor();

@@ -4,7 +4,6 @@
 #include <App/EnginePipeline.hpp>
 #include <Dependencies/Globals.hpp>
 #include <Threading/ThreadRegistry.hpp>
-#include <ECS/Registry.hpp>
 
 #ifndef STNKS_HEADLESS
 #include <App/App.hpp>
@@ -62,7 +61,6 @@ namespace stnks
         std::shared_ptr<Globals>        globals_;
         ThreadDebugInfo                 threadDebugInfo_;
         ThreadRegistry                  threadRegistry_;
-        ecs::Registry                   registry_;
 
     public:
 #ifndef STNKS_HEADLESS

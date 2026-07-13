@@ -13,7 +13,6 @@
 
 namespace stnks
 {
-    // ── TableFilter ─────────────────────────────────────────────────────────
 
     bool StrategyTablePanel::TableFilter::HasAnyFilter() const
     {
@@ -41,11 +40,9 @@ namespace stnks
         pnlEnabled = false;
     }
 
-    // ── Constructor ─────────────────────────────────────────────────────────
 
     StrategyTablePanel::StrategyTablePanel(UIContext& ctx) : ctx_(ctx) {}
 
-    // ── Full Window ──────────────────────────────────────────────────────────
 
     void StrategyTablePanel::DrawWindow(bool* open)
     {
@@ -137,7 +134,6 @@ namespace stnks
         ImGui::End();
     }
 
-    // ── Single Filtered Table ─────────────────────────────────────────────────
 
     void StrategyTablePanel::Draw(const std::function<bool(const Strategy&)>& filter)
     {
@@ -161,7 +157,6 @@ namespace stnks
         DrawTableBody(filtered);
     }
 
-    // ── Toolbar ─────────────────────────────────────────────────────────────
 
     void StrategyTablePanel::DrawToolbar(std::vector<Strategy*>& filtered)
     {
@@ -246,7 +241,6 @@ namespace stnks
             selection_.clear();
     }
 
-    // ── Table Body ──────────────────────────────────────────────────────────
 
     void StrategyTablePanel::DrawTableBody(std::vector<Strategy*>& filtered)
     {
@@ -329,7 +323,6 @@ namespace stnks
         HandleDeferredActions(deleteId, viewStrat);
     }
 
-    // ── Single Row ──────────────────────────────────────────────────────────
 
     void StrategyTablePanel::DrawStrategyRow(
         Strategy& s, const std::vector<Strategy*>& filtered,
@@ -389,7 +382,6 @@ namespace stnks
         ImGui::PopID();
     }
 
-    // ── Identity Cells (Symbol, Type, Direction) ────────────────────────────
 
     void StrategyTablePanel::DrawIdentityCells(Strategy& s, bool isCellEditing)
     {
@@ -458,7 +450,6 @@ namespace stnks
         }
     }
 
-    // ── Price Cells (Entry, Current, TP, SL, Qty) ───────────────────────────
 
     void StrategyTablePanel::DrawPriceCells(Strategy& s, bool isCellEditing)
     {
@@ -541,7 +532,6 @@ namespace stnks
         }
     }
 
-    // ── Fee Cells (Entry Fee, Exit Fee) ─────────────────────────────────────
 
     void StrategyTablePanel::DrawFeeCells(Strategy& s, bool isCellEditing)
     {
@@ -572,7 +562,6 @@ namespace stnks
         DrawFee(StratCol::ExitFee,  s.exitFee,  "##xfee");
     }
 
-    // ── Analytics Cells (R:R, P/L%, Exit) ───────────────────────────────────
 
     void StrategyTablePanel::DrawAnalyticsCells(Strategy& s)
     {
@@ -622,7 +611,6 @@ namespace stnks
         HandleRowClick(s, {});
     }
 
-    // ── Status Cells (Status, Broker, Age) ──────────────────────────────────
 
     void StrategyTablePanel::DrawStatusCells(Strategy& s, bool isCellEditing)
     {
@@ -722,7 +710,6 @@ namespace stnks
         HandleRowClick(s, {});
     }
 
-    // ── Averaging Cells (Avg Down, Avg Up) ──────────────────────────────────
     //
     // Both columns answer: "if I double my position at current price, what happens?"
     // Single "Avg" column that shows context-dependent info:
@@ -757,7 +744,6 @@ namespace stnks
 
         if (isLosing)
         {
-            // ── AVG DOWN: cost to double position at current price ───────
             float cost   = qty * curPrice;
             float newAvg = (entry + curPrice) / 2.f;
             float pct    = ((newAvg - entry) / entry) * 100.f;
@@ -830,7 +816,6 @@ namespace stnks
         HandleRowClick(s, {});
     }
 
-    // ── Notes + Action Cells ────────────────────────────────────────────────
 
     void StrategyTablePanel::DrawActionCells(
         Strategy& s, int64_t& deleteId, const Strategy*& viewStrat)
@@ -867,7 +852,6 @@ namespace stnks
             deleteId = s.id;
     }
 
-    // ── Deferred Actions ────────────────────────────────────────────────────
 
     void StrategyTablePanel::HandleDeferredActions(
         int64_t deleteId, const Strategy* viewStrat)
@@ -922,7 +906,6 @@ namespace stnks
         }
     }
 
-    // ── Row Interaction ─────────────────────────────────────────────────────
 
     void StrategyTablePanel::HandleRowClick(
         Strategy& s, const std::vector<Strategy*>& filtered)
@@ -975,7 +958,6 @@ namespace stnks
         }
     }
 
-    // ── Sort ────────────────────────────────────────────────────────────────
 
     void StrategyTablePanel::SortStrategies(std::vector<Strategy*>& ptrs)
     {
@@ -1017,7 +999,6 @@ namespace stnks
         std::sort(ptrs.begin(), ptrs.end(), cmp);
     }
 
-    // ── Cell Edit Helpers ───────────────────────────────────────────────────
 
     void StrategyTablePanel::StartCellEdit(const Strategy& strat, StratCol col)
     {
@@ -1063,7 +1044,6 @@ namespace stnks
         spdlog::info("[Strategy] Cell edit committed for #{}", strat.id);
     }
 
-    // ── Filter Matching ─────────────────────────────────────────────────────
 
     static bool ContainsInsensitive(const char* haystack, const char* needle)
     {
@@ -1114,7 +1094,6 @@ namespace stnks
         return true;
     }
 
-    // ── Filter Row ──────────────────────────────────────────────────────────
 
     void StrategyTablePanel::DrawFilterRow()
     {
@@ -1184,7 +1163,6 @@ namespace stnks
         ImGui::PopStyleColor();
     }
 
-    // ── CSV Export ──────────────────────────────────────────────────────────
 
     void StrategyTablePanel::ExportCSV()
     {
@@ -1222,7 +1200,6 @@ namespace stnks
         spdlog::info("[CSV] Exported to '{}'", path);
     }
 
-    // ── CSV Import ──────────────────────────────────────────────────────────
 
     void StrategyTablePanel::ImportCSV()
     {
@@ -1280,7 +1257,6 @@ namespace stnks
         spdlog::info("[CSV] Imported {} strategies from '{}'", imported, paths[0]);
     }
 
-    // ── Public interaction methods ──────────────────────────────────────────
 
     void StrategyTablePanel::ClearCellEditForRow(int64_t rowId)
     {

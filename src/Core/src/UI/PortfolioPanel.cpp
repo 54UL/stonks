@@ -56,7 +56,6 @@ namespace stnks
         ImGui::End();
     }
 
-    // ── Compute Holdings ────────────────────────────────────────────────────
 
     void PortfolioPanel::ComputeHoldings(std::vector<Holding>& holdings)
     {
@@ -104,7 +103,6 @@ namespace stnks
         }
     }
 
-    // ── Period P/L ──────────────────────────────────────────────────────────
 
     PortfolioPanel::PeriodPnL PortfolioPanel::ComputePeriodPnL(bool isMexican, int64_t cutoff)
     {
@@ -127,7 +125,6 @@ namespace stnks
         return result;
     }
 
-    // ── Draw Section ────────────────────────────────────────────────────────
 
     void PortfolioPanel::DrawSection(
         const char* title, const char* currSym,
@@ -155,7 +152,6 @@ namespace stnks
         ImGui::Spacing();
     }
 
-    // ── Summary Cards ───────────────────────────────────────────────────────
 
     void PortfolioPanel::DrawSummaryCards(
         const char* currSym, float secValue,
@@ -189,7 +185,6 @@ namespace stnks
         ImGui::Spacing();
     }
 
-    // ── Cumulative P/L Chart ────────────────────────────────────────────────
 
     void PortfolioPanel::DrawCumulativePnLChart(const char* currSym, bool isMexican)
     {
@@ -257,7 +252,6 @@ namespace stnks
         ImGui::Dummy(ImVec2(gW, gH + 4.f));
     }
 
-    // ── Live Value Chart ────────────────────────────────────────────────────
 
     void PortfolioPanel::DrawLiveValueChart(const char* currSym, bool isMexican)
     {
@@ -331,7 +325,6 @@ namespace stnks
         ImGui::Dummy(ImVec2(gW, gH + 4.f));
     }
 
-    // ── Period Tabs ─────────────────────────────────────────────────────────
 
     void PortfolioPanel::DrawPeriodTabs(const char* currSym, bool isMexican)
     {
@@ -372,7 +365,6 @@ namespace stnks
         }
     }
 
-    // ── Holdings Table ──────────────────────────────────────────────────────
 
     void PortfolioPanel::DrawHoldingsTable(
         std::vector<Holding*>& hlist, const char* currSym, bool isMexican)

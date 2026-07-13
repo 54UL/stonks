@@ -72,7 +72,6 @@ namespace stnks
         feedServer_.BroadcastTick(symbol, tick);
     }
 
-    // ── Routes ───────────────────────────────────────────────────────────────────
 
     void HttpApiServer::SetupRoutes()
     {
@@ -228,7 +227,6 @@ namespace stnks
         });
     }
 
-    // ── JSON Serialization ───────────────────────────────────────────────────────
 
     std::string HttpApiServer::StrategyToJson(const Strategy& s)
     {

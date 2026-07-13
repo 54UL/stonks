@@ -5,11 +5,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# ── Headless mode (server-only, no graphics) ──────────────────────────────
 option(STNKS_HEADLESS "Build without graphics (SDL2, OpenGL, ImGui, UI, Charts)" OFF)
 
-# ── Headers common to both modes ──────────────────────────────────────────
 set(STNKS_CORE_HEADERS
+    include/EnumTraits.hpp
     include/Stnks.hpp
     include/Paths.hpp
     include/Engine.hpp
@@ -20,10 +19,6 @@ set(STNKS_CORE_HEADERS
     include/App/ExecutionPipeline.hpp
     include/GlobalKeys.hpp
     include/Dependencies/Globals.hpp
-    include/ECS/ComponentPool.hpp
-    include/ECS/Entity.hpp
-    include/ECS/ISystem.hpp
-    include/ECS/Registry.hpp
     include/Threading/ThreadPool.hpp
     include/Threading/AsyncQueue.hpp
     include/Threading/WorkerThread.hpp
@@ -68,7 +63,6 @@ set(STNKS_CORE_HEADERS
     # Broker
     include/Broker/IBrokerConnector.hpp
     include/Broker/WebhookReceiver.hpp
-    include/Broker/GBMBrokerConnector.hpp
     include/Broker/MetaTraderConnector.hpp
     include/Broker/BinanceBrokerConnector.hpp
     # Server
@@ -78,7 +72,6 @@ set(STNKS_CORE_HEADERS
     include/Server/StrategyServer.hpp
     include/Server/HttpApiServer.hpp)
 
-# ── Sources common to both modes ──────────────────────────────────────────
 set(STNKS_CORE_SOURCES
     src/Stnks.cpp
     src/Engine.cpp
@@ -108,7 +101,6 @@ set(STNKS_CORE_SOURCES
     src/Net/WebSocketClient.cpp
     # Broker
     src/Broker/WebhookReceiver.cpp
-    src/Broker/GBMBrokerConnector.cpp
     src/Broker/MetaTraderConnector.cpp
     src/Broker/BinanceBrokerConnector.cpp
     # Server
@@ -117,7 +109,6 @@ set(STNKS_CORE_SOURCES
     src/Server/StrategyServer.cpp
     src/Server/HttpApiServer.cpp)
 
-# ── Graphics-only headers & sources (skipped in headless mode) ────────────
 if(NOT STNKS_HEADLESS)
     list(APPEND STNKS_CORE_HEADERS
         include/App/SDL2App.hpp
@@ -139,8 +130,10 @@ if(NOT STNKS_HEADLESS)
         include/UI/MarketSignalsPanel.hpp
         include/UI/AIPanels.hpp
         include/UI/GraphEventsPanel.hpp
+        include/UI/MarketInsightsPanel.hpp
         include/UI/DashboardPanel.hpp
         include/UI/ServerLauncherPanel.hpp
+        include/UI/PositionsPanel.hpp
         # Charts
         include/Charts/ChartLayer.hpp
         include/Charts/CandlestickLayer.hpp
@@ -180,8 +173,10 @@ if(NOT STNKS_HEADLESS)
         src/UI/MarketSignalsPanel.cpp
         src/UI/AIPanels.cpp
         src/UI/GraphEventsPanel.cpp
+        src/UI/MarketInsightsPanel.cpp
         src/UI/DashboardPanel.cpp
         src/UI/ServerLauncherPanel.cpp
+        src/UI/PositionsPanel.cpp
         # Charts
         src/Charts/StockChart.cpp
         src/Charts/DetachedChart.cpp
@@ -195,7 +190,6 @@ if(NOT STNKS_HEADLESS)
         external/imgui/backends/imgui_impl_opengl3.cpp)
 endif()
 
-# ── Packages ──────────────────────────────────────────────────────────────
 find_package(Threads REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(cereal CONFIG REQUIRED)
@@ -215,7 +209,6 @@ if(NOT STNKS_HEADLESS)
     include_directories(${GLEW_INCLUDE_DIRS})
 endif()
 
-# ── Library ───────────────────────────────────────────────────────────────
 add_library(STNKS_CORE STATIC ${STNKS_CORE_SOURCES} ${STNKS_CORE_HEADERS})
 
 set_target_properties(STNKS_CORE PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -240,7 +233,6 @@ if(NOT STNKS_HEADLESS)
         PUBLIC ${GLM_INCLUDE_DIRS})
 endif()
 
-# ── Link libraries ────────────────────────────────────────────────────────
 target_link_libraries(STNKS_CORE
     PUBLIC Threads::Threads
     PUBLIC spdlog::spdlog

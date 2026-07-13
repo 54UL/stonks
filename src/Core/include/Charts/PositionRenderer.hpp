@@ -222,6 +222,9 @@ namespace stnks
             StrategyInteraction result;
             ImGuiIO& io = ImGui::GetIO();
 
+            // Only interact when this chart's child window is hovered
+            bool windowHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+
             float yEntry = vp.PriceToY(strategy.entryPrice);
             float right  = vp.chartOrigin.x + vp.chartSize.x;
 
@@ -234,7 +237,7 @@ namespace stnks
 
             // --- Entry drag handle ---
             bool entryHovered = DrawGizmoHandle(drawList, vp, yEntry, kEntryColor, kEntryHoverColor,
-                                                strategy.entryPrice, "Entry");
+                                                strategy.entryPrice, "Entry", windowHovered);
             if (entryHovered && !isDragging_)
                 activeTarget_ = DragTarget::Entry;
 
@@ -245,7 +248,7 @@ namespace stnks
                 float yTP = vp.PriceToY(strategy.takeProfit);
                 tpHovered = DrawGizmoHandle(drawList, vp, yTP,
                     IM_COL32(38, 166, 91, 180), IM_COL32(50, 200, 110, 240),
-                    strategy.takeProfit, "TP");
+                    strategy.takeProfit, "TP", windowHovered);
                 if (tpHovered && !isDragging_)
                     activeTarget_ = DragTarget::TP;
             }
@@ -257,7 +260,7 @@ namespace stnks
                 float ySL = vp.PriceToY(strategy.stopLoss);
                 slHovered = DrawGizmoHandle(drawList, vp, ySL,
                     IM_COL32(214, 48, 49, 180), IM_COL32(240, 70, 70, 240),
-                    strategy.stopLoss, "SL");
+                    strategy.stopLoss, "SL", windowHovered);
                 if (slHovered && !isDragging_)
                     activeTarget_ = DragTarget::SL;
             }
@@ -406,7 +409,8 @@ namespace stnks
 
         bool DrawGizmoHandle(ImDrawList* drawList, const ChartViewport& vp,
                              float y, ImU32 color, ImU32 hoverColor,
-                             float price, const char* prefix)
+                             float price, const char* prefix,
+                             bool windowHovered = true)
         {
             float x = vp.chartOrigin.x + 10.f;
             float hy = y - kHandleH * 0.5f;
@@ -414,7 +418,7 @@ namespace stnks
             ImVec2 min(x, hy);
             ImVec2 max(x + kHandleW, hy + kHandleH);
 
-            bool hovered = ImGui::IsMouseHoveringRect(min, max) && !isDragging_;
+            bool hovered = windowHovered && ImGui::IsMouseHoveringRect(min, max) && !isDragging_;
             bool active  = isDragging_;
 
             ImU32 col = (hovered || active) ? hoverColor : color;

@@ -7,7 +7,6 @@
 
 namespace stnks
 {
-    // ── AsyncQueue ───────────────────────────────────────────────────────────────
     // Lock-free Single-Producer Single-Consumer bounded ring buffer.
     //
     // Use cases:

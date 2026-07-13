@@ -8,7 +8,6 @@ namespace stnks
 {
     MarketSignalService::MarketSignalService() = default;
 
-    // ── Signal ingestion ──────────────────────────────────────────────────────
 
     void MarketSignalService::IngestGraphEvents(const std::vector<GraphEvent>& newEvents)
     {
@@ -380,7 +379,6 @@ namespace stnks
         Trim();
     }
 
-    // ── Signal access ─────────────────────────────────────────────────────────
 
     std::vector<MarketSignal> MarketSignalService::GetAll() const
     {
@@ -443,7 +441,6 @@ namespace stnks
         return count;
     }
 
-    // ── Signal state changes ──────────────────────────────────────────────────
 
     void MarketSignalService::MarkRead(int64_t signalId)
     {
@@ -482,7 +479,6 @@ namespace stnks
         signals_.clear();
     }
 
-    // ── Private helpers ───────────────────────────────────────────────────────
 
     int64_t MarketSignalService::NextId()
     {

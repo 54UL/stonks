@@ -13,60 +13,30 @@
 
 namespace stnks
 {
-    // A self-contained dockable chart window that can be torn out of the main
-    // Stock Charts panel. Each DetachedChart has its own StockChart instance,
-    // data, timeline, symbol search, and full set of indicators.
-    //
-    // Created dynamically when the user drags an indicator out of a chart panel
-    // or duplicates a chart view. Rendered as an ImGui window with docking enabled
-    // so it can float, dock into the main layout, or become an OS-native window.
-    //
-    // Each detached chart is fully independent — changing symbol in main panel
-    // does not affect detached charts.
     struct DetachedChart
     {
-        // Unique window ID (stable across title changes via ###)
         std::string windowId;
-
-        // The symbol this chart shows (independent from main panel)
         std::string symbol;
 
-        // Chart data and renderer
         StockQuote  quote;
         StockChart  chart;
         bool        layersCreated = false;
         bool        open          = true;
-        bool        refreshing    = false;   // Background data refresh in progress
-        float       refreshTimer  = 30.f;    // Countdown to next auto-refresh
+        bool        refreshing    = false;
+        float       refreshTimer  = 30.f;
 
-        // Which indicator to focus (empty = show all)
         std::string focusedIndicator;
 
-        // Symbol search bar state
         char  searchBuf[64]   = "";
-        bool  searchDirty     = false;  // True when user typed and needs fetch
+        bool  searchDirty     = false;
 
-        // Callback: fired when this detached chart requests data for a new symbol.
-        // UI should hook this to call marketService_->FetchQuoteAsync().
-        // Args: (detachedChartId, symbol)
         std::function<void(int, const std::string&)> onSymbolChanged;
-
-        // Callback: wires strategy layer callbacks after layers are created.
-        // Args: (strategyLayer, symbol)
         std::function<void(StrategyLayer&, const std::string&)> onWireStrategyLayer;
-
-        // Callback: wires tear-out/duplicate callbacks on the StockChart.
-        // Args: (chart, symbol)
         std::function<void(StockChart&, const std::string&)> onWireTearOut;
-
-        // Callback: fired when user changes timeframe.
-        // Args: (detachedChartId, symbol, interval, range)
         std::function<void(int, const std::string&, const char*, const char*)> onTimeframeChanged;
 
-        // Timeframe tracking
-        int timeframeIdx = 7; // Default = 1D (kDefaultTimeframe)
+        int timeframeIdx = 7;
 
-        // Data source info for freshness display
         struct SourceInfo
         {
             const char* name     = nullptr;
@@ -74,14 +44,11 @@ namespace stnks
             int         delaySec = 0;
             const char* brokerName = nullptr; // non-null if RT broker active
         };
-        // Callback to get current source info (wired by UI)
         std::function<SourceInfo()> getSourceInfo;
 
-        // Unique counter for generating window IDs
         static int nextId_;
         int        id = 0;
 
-        // Create a detached chart for a symbol, optionally focusing one indicator
         static DetachedChart Create(const std::string& sym,
                                     const StockQuote& data,
                                     const std::string& focusIndicator = "")
@@ -96,7 +63,6 @@ namespace stnks
             std::strncpy(dc.searchBuf, sym.c_str(), sizeof(dc.searchBuf) - 1);
             dc.searchBuf[sizeof(dc.searchBuf) - 1] = '\0';
 
-            // Sync view mode index with focused indicator
             if (focusIndicator.empty())                               dc.viewModeIdx = 0;
             else if (focusIndicator == "Candles")                     dc.viewModeIdx = 1;
             else if (focusIndicator == "Volume")                      dc.viewModeIdx = 2;
@@ -106,7 +72,6 @@ namespace stnks
             return dc;
         }
 
-        // Get display title (changes with symbol, but window ID is stable)
         std::string GetTitle() const
         {
             std::string sym = symbol.empty() ? "Chart" : symbol;
@@ -115,7 +80,6 @@ namespace stnks
             return sym + " - " + focusedIndicator + windowId;
         }
 
-        // Initialize layers (call once after creation, deferred so data is ready)
         void EnsureLayers()
         {
             if (layersCreated) return;
@@ -127,7 +91,6 @@ namespace stnks
 
             if (focusedIndicator.empty())
             {
-                // Full chart: candlestick main + all indicators stacked
                 chart.AddLayer<CandlestickLayer>();
                 sl = &chart.AddLayer<StrategyLayer>();
                 chart.AddLayer<VolumeLayer>();
@@ -137,11 +100,10 @@ namespace stnks
             }
             else
             {
-                // Focused view: the requested indicator becomes the main chart area.
                 sl = &chart.AddLayer<StrategyLayer>();
 
                 auto addFocused = [&](auto& layer) {
-                    layer.height  = 0.f;  // Render in main area
+                    layer.height  = 0.f;
                     layer.visible = true;
                 };
 
@@ -163,7 +125,6 @@ namespace stnks
                 }
                 else
                 {
-                    // Unknown indicator — fall back to full chart
                     chart.AddLayer<CandlestickLayer>();
                     chart.AddLayer<VolumeLayer>();
                     chart.AddLayer<RSILayer>();
@@ -174,22 +135,18 @@ namespace stnks
 
             chart.SetData(quote);
 
-            // Wire strategy layer callbacks so detached charts are fully functional
             if (sl && onWireStrategyLayer)
                 onWireStrategyLayer(*sl, symbol);
 
-            // Wire tear-out/duplicate callbacks
             if (onWireTearOut)
                 onWireTearOut(chart, symbol);
         }
 
-        // Chart view mode names (for the swap combo)
         static constexpr const char* kViewModes[] = {
             "Full", "Candles", "Volume", "RSI", "MACD"
         };
-        int viewModeIdx = 0; // 0=Full, 1=Candles, 2=Volume, 3=RSI, 4=MACD
+        int viewModeIdx = 0;
 
-        // Render the detached chart window. Returns false if closed.
         bool Draw()
         {
             if (!open) return false;
@@ -206,7 +163,6 @@ namespace stnks
 
             ImGui::PushID(id);
 
-            // ── Row 1: Symbol search + View mode + Indicators ──────────────
             ImGui::SetNextItemWidth(120.f);
             if (ImGui::InputText("##dcSearch", searchBuf, sizeof(searchBuf),
                                  ImGuiInputTextFlags_EnterReturnsTrue))
@@ -253,10 +209,8 @@ namespace stnks
                     chart.ResetView();
             }
 
-            // ── Row 2: Timeframe buttons + Freshness ───────────────────────
             DrawTimeframeBar();
 
-            // ── Chart ──────────────────────────────────────────────────────
             if (!quote.candles.empty())
             {
                 chart.Draw(("##dc_" + std::to_string(id)).c_str());
@@ -334,7 +288,6 @@ namespace stnks
             ImGui::SameLine();
             ImGui::TextDisabled("| Candle: %s ago", candleBuf);
 
-            // Source info
             if (getSourceInfo)
             {
                 auto si = getSourceInfo();
@@ -354,7 +307,6 @@ namespace stnks
                 }
             }
 
-            // Market state
             if (!symbol.empty())
             {
                 MarketState mktState = MarketHours::GetState(symbol);
@@ -376,7 +328,6 @@ namespace stnks
 
     public:
 
-        // Update chart data (called when fetch completes)
         void UpdateData(const StockQuote& newQuote)
         {
             quote = newQuote;
@@ -386,7 +337,6 @@ namespace stnks
                 chart.SetData(quote);
         }
 
-        // Reset chart for a new symbol (clears layers so they get re-created)
         void ChangeSymbol(const std::string& newSymbol, const StockQuote& newQuote)
         {
             symbol = newSymbol;
@@ -395,19 +345,15 @@ namespace stnks
             std::strncpy(searchBuf, newSymbol.c_str(), sizeof(searchBuf) - 1);
             searchBuf[sizeof(searchBuf) - 1] = '\0';
 
-            // Reset chart completely for new symbol (layers re-created and re-wired via EnsureLayers)
             chart = StockChart{};
             layersCreated = false;
         }
 
-        // Change which indicator is the main (center) chart panel.
-        // Pass empty string for full chart with all indicators.
         void SetFocusedIndicator(const std::string& indicator)
         {
             focusedIndicator = indicator;
             chart = StockChart{};
             layersCreated = false;
-            // EnsureLayers() on next Draw() will re-create with the new focus
         }
     };
 

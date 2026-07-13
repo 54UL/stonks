@@ -13,7 +13,11 @@
       "Bash(find D:/repos2/stonks-manager -path */httplib*)",
       "Bash(gh api:*)",
       "Bash(find /d/repos2/stonks-manager -name *.exe -path */build/*)",
-      "Bash(find /d/repos2/stonks-manager/src/cmake-build-debug -name *.exe -not -path */vcpkg*)"
+      "Bash(find /d/repos2/stonks-manager/src/cmake-build-debug -name *.exe -not -path */vcpkg*)",
+      "Bash(xargs grep:*)",
+      "Bash(wc -l D:/repos2/stonks-manager/src/Core/include/**/*.hpp D:/repos2/stonks-manager/src/Core/src/**/*.cpp)",
+      "Bash(xargs sed:*)",
+      "Bash(sort -t: -k2 -nr)"
     ]
   }
 }

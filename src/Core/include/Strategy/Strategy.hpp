@@ -1,37 +1,41 @@
 #pragma once
 
+#include <EnumTraits.hpp>
 #include <string>
 #include <cstdint>
 
 namespace stnks
 {
-    enum class StrategyStatus : int
-    {
-        Active    = 0,  // Monitoring price
-        TPHit     = 1,  // Take profit triggered
-        SLHit     = 2,  // Stop loss triggered
-        Cancelled = 3   // Manually cancelled
+    enum class StrategyStatus : int { Active = 0, TPHit = 1, SLHit = 2, Cancelled = 3 };
+    enum class StrategyDirection : int { Long = 0, Short = 1 };
+    enum class StrategyType : int { TPSL = 0, Position = 1, AI = 2 };
+    enum class BrokerSource : int { Auto = 0, Binance = 1, MetaTrader = 3 };
+
+    template<> struct EnumTraits<StrategyStatus> {
+        static constexpr std::pair<StrategyStatus, const char*> values[] = {
+            {StrategyStatus::Active, "Active"}, {StrategyStatus::TPHit, "TP Hit"},
+            {StrategyStatus::SLHit, "SL Hit"}, {StrategyStatus::Cancelled, "Cancelled"}
+        };
     };
 
-    enum class StrategyDirection : int
-    {
-        Long  = 0,  // Buying: TP above entry, SL below entry
-        Short = 1   // Selling: TP below entry, SL above entry
+    template<> struct EnumTraits<StrategyDirection> {
+        static constexpr std::pair<StrategyDirection, const char*> values[] = {
+            {StrategyDirection::Long, "Long"}, {StrategyDirection::Short, "Short"}
+        };
     };
 
-    enum class StrategyType : int
-    {
-        TPSL     = 0,  // Classic take-profit / stop-loss
-        Position = 1,  // Track an open position (entry tracking, P&L, news)
-        AI       = 2   // AI-managed: news analysis → auto-trade or operations/warnings
+    template<> struct EnumTraits<StrategyType> {
+        static constexpr std::pair<StrategyType, const char*> values[] = {
+            {StrategyType::TPSL, "TP/SL"}, {StrategyType::Position, "Position"},
+            {StrategyType::AI, "AI"}
+        };
     };
 
-    enum class BrokerSource : int
-    {
-        Auto       = 0,  // Automatically determined from data source
-        Binance    = 1,  // Binance Spot
-        GBM        = 2,  // GBM+ (Bolsa Mexicana)
-        MetaTrader = 3,  // MetaTrader 5
+    template<> struct EnumTraits<BrokerSource> {
+        static constexpr std::pair<BrokerSource, const char*> values[] = {
+            {BrokerSource::Auto, "Auto"}, {BrokerSource::Binance, "Binance"},
+            {BrokerSource::MetaTrader, "MT5"}
+        };
     };
 
     struct Strategy
@@ -44,30 +48,18 @@ namespace stnks
         float              takeProfit  = 0.f;
         float              stopLoss    = 0.f;
         StrategyStatus     status      = StrategyStatus::Active;
-        int64_t            createdAt   = 0;   // Unix timestamp
-        int64_t            triggeredAt = 0;   // When TP/SL was hit (0 = not triggered)
+        int64_t            createdAt   = 0;
+        int64_t            triggeredAt = 0;
         std::string        notes;
-
-        // Composition: link to a parent strategy (0 = root/standalone)
         int64_t            parentId    = 0;
-        int                priority    = 0;     // Lower = higher priority
-
-        // Position tracking fields
-        float              quantity    = 0.f;   // Number of shares/contracts
-        int64_t            entryDate   = 0;     // When the position was opened
-
-        // Close tracking: recorded when position is closed/cancelled/triggered
-        float              exitPrice      = 0.f;   // Price at which position was exited
-        float              closedPnlPct   = 0.f;   // Frozen P/L% at close time
-
-        // Fees: total flat amounts (commissions, spread cost, etc.)
-        float              entryFee       = 0.f;   // Total fee paid on entry
-        float              exitFee        = 0.f;   // Total fee paid on exit
-
-        // Enable/disable: disabled strategies are not monitored but still shown
+        int                priority    = 0;
+        float              quantity    = 0.f;
+        int64_t            entryDate   = 0;
+        float              exitPrice      = 0.f;
+        float              closedPnlPct   = 0.f;
+        float              entryFee       = 0.f;
+        float              exitFee        = 0.f;
         bool               enabled        = true;
-
-        // Broker source: which broker this operation was made on
         BrokerSource       broker         = BrokerSource::Auto;
 
         bool IsActive() const { return status == StrategyStatus::Active; }
@@ -76,7 +68,6 @@ namespace stnks
         bool IsTPSL() const { return type == StrategyType::TPSL; }
         bool IsAI() const { return type == StrategyType::AI; }
 
-        // Effective prices adjusted for fees (per-unit cost basis)
         float EffectiveEntryPrice() const
         {
             if (entryFee == 0.f) return entryPrice;
@@ -91,7 +82,6 @@ namespace stnks
             return exitPrice - (exitFee / q);
         }
 
-        // Risk/reward ratio (uses effective entry to reflect real cost basis)
         float RiskReward() const
         {
             float eff   = EffectiveEntryPrice();
@@ -101,7 +91,6 @@ namespace stnks
             return reward / risk;
         }
 
-        // Profit/loss percentages (uses effective entry)
         float TPPercent() const
         {
             float eff = EffectiveEntryPrice();
@@ -115,7 +104,6 @@ namespace stnks
             return ((stopLoss - eff) / eff) * 100.f;
         }
 
-        // P&L for position tracking (uses effective entry as real cost basis)
         float UnrealizedPnL(float currentPrice) const
         {
             float eff = EffectiveEntryPrice();
@@ -136,55 +124,11 @@ namespace stnks
         }
     };
 
-    inline const char* StatusToString(StrategyStatus s)
-    {
-        switch (s)
-        {
-        case StrategyStatus::Active:    return "Active";
-        case StrategyStatus::TPHit:     return "TP Hit";
-        case StrategyStatus::SLHit:     return "SL Hit";
-        case StrategyStatus::Cancelled: return "Cancelled";
-        }
-        return "Unknown";
-    }
-
-    inline const char* DirectionToString(StrategyDirection d)
-    {
-        return d == StrategyDirection::Long ? "Long" : "Short";
-    }
-
-    inline const char* StrategyTypeToString(StrategyType t)
-    {
-        switch (t)
-        {
-        case StrategyType::TPSL:     return "TP/SL";
-        case StrategyType::Position: return "Position";
-        case StrategyType::AI:       return "AI";
-        }
-        return "Unknown";
-    }
-
-    inline const char* BrokerSourceToString(BrokerSource b)
-    {
-        switch (b)
-        {
-        case BrokerSource::Auto:       return "Auto";
-        case BrokerSource::Binance:    return "Binance";
-        case BrokerSource::GBM:        return "GBM+";
-        case BrokerSource::MetaTrader: return "MT5";
-        }
-        return "Unknown";
-    }
-
-    // Map a data source name (from SymbolMatch.source) to a BrokerSource.
-    inline BrokerSource BrokerSourceFromName(const std::string& sourceName)
-    {
-        if (sourceName == "Binance")       return BrokerSource::Binance;
-        if (sourceName == "GBM+")          return BrokerSource::GBM;
-        if (sourceName == "MT5")           return BrokerSource::MetaTrader;
-        return BrokerSource::Auto;
-    }
-
-    inline constexpr int kBrokerSourceCount = 4;
+    inline const char* StatusToString(StrategyStatus s) { return EnumToString(s); }
+    inline const char* DirectionToString(StrategyDirection d) { return EnumToString(d); }
+    inline const char* StrategyTypeToString(StrategyType t) { return EnumToString(t); }
+    inline const char* BrokerSourceToString(BrokerSource b) { return EnumToString(b); }
+    inline BrokerSource BrokerSourceFromName(const std::string& name) { return EnumFromString<BrokerSource>(name); }
+    inline constexpr int kBrokerSourceCount = static_cast<int>(EnumCount<BrokerSource>());
 
 } // namespace stnks

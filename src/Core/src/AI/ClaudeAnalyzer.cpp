@@ -7,7 +7,6 @@
 
 namespace stnks
 {
-    // ── Default embedded templates (used when files are missing) ─────────────
 
     static const char* kDefaultAnalysis =
         "You are a financial market analyst. Analyze {{symbol}}.\n\n"
@@ -32,7 +31,6 @@ namespace stnks
         "urgency: info|warning|alert, reason, suggested_price, confidence: 0-1}]\n"
         "   strategy_id=0 means new position. Keep concise (1-2 sentences each).";
 
-    // ── Constructor ──────────────────────────────────────────────────────────
 
     ClaudeAnalyzer::ClaudeAnalyzer(HttpClient& http, const Config& config)
         : http_(http), config_(config)
@@ -44,7 +42,6 @@ namespace stnks
                          config_.model, config_.promptsDir);
     }
 
-    // ── Analysis entry points ────────────────────────────────────────────────
 
     AnalysisResult ClaudeAnalyzer::Analyze(
         const std::string& symbol,
@@ -117,7 +114,6 @@ namespace stnks
         return ParseResponse(symbol, response.body);
     }
 
-    // ── Async variants ───────────────────────────────────────────────────────
 
     void ClaudeAnalyzer::AnalyzeAsync(
         const std::string& symbol,
@@ -156,7 +152,6 @@ namespace stnks
         });
     }
 
-    // ── Template rendering ───────────────────────────────────────────────────
 
     std::string ClaudeAnalyzer::RenderPrompt(
         const std::string& templateFile,
@@ -176,7 +171,6 @@ namespace stnks
         return kDefaultInstructions;
     }
 
-    // ── Variable builders ────────────────────────────────────────────────────
 
     std::unordered_map<std::string, std::string> ClaudeAnalyzer::BuildVars(
         const std::string& symbol,
@@ -208,7 +202,6 @@ namespace stnks
         };
     }
 
-    // ── Format helpers ───────────────────────────────────────────────────────
 
     std::string ClaudeAnalyzer::FormatNews(const std::vector<NewsArticle>& news)
     {
@@ -294,7 +287,6 @@ namespace stnks
         return ss.str();
     }
 
-    // ── Response parsing ─────────────────────────────────────────────────────
 
     AnalysisResult ClaudeAnalyzer::ParseResponse(const std::string& symbol, const std::string& responseBody)
     {

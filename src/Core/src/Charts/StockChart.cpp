@@ -33,7 +33,6 @@ namespace stnks
         AutoScalePrice();
     }
 
-    // ── Layer tree helpers ────────────────────────────────────────────────────
 
     void StockChart::RebuildDefaultTree()
     {
@@ -67,11 +66,9 @@ namespace stnks
     {
         for (auto& node : layerTree_)
         {
-            // Remove from children
             auto& ch = node.children;
             ch.erase(std::remove(ch.begin(), ch.end(), layerIdx), ch.end());
         }
-        // Remove as root
         layerTree_.erase(
             std::remove_if(layerTree_.begin(), layerTree_.end(),
                            [&](const LayerNode& n) { return n.layerIdx == layerIdx; }),
@@ -80,7 +77,6 @@ namespace stnks
 
     void StockChart::ApplyLayerTree()
     {
-        // Save original heights once
         if (!heightsSaved_)
         {
             heightsSaved_ = true;
@@ -88,7 +84,6 @@ namespace stnks
                 originalHeights_.push_back({layer->name, layer->height});
         }
 
-        // Build default tree if needed
         if (layerTree_.empty())
             RebuildDefaultTree();
 
@@ -99,7 +94,6 @@ namespace stnks
             if (node.layerIdx < 0 || node.layerIdx >= (int)layers_.size()) continue;
             auto& layer = layers_[node.layerIdx];
 
-            // Check if this root or any of its children are visible
             bool anyVisible = layer->visible;
             for (int ci : node.children)
                 if (ci >= 0 && ci < (int)layers_.size() && layers_[ci]->visible)
@@ -114,7 +108,6 @@ namespace stnks
             }
             else
             {
-                // Restore original sub-panel height
                 float h = 100.f;
                 for (auto& orig : originalHeights_)
                     if (orig.name == layer->name) { h = (orig.height > 0.f) ? orig.height : 100.f; break; }
@@ -125,14 +118,12 @@ namespace stnks
         layerTreeDirty_ = false;
     }
 
-    // ── Indicator panel (tree view with drag-drop) ────────────────────────
 
     void StockChart::DrawIndicatorCombo()
     {
         if (layerTree_.empty())
             RebuildDefaultTree();
 
-        // Count visible layers
         int visibleCount = 0;
         for (auto& node : layerTree_)
         {
@@ -143,7 +134,6 @@ namespace stnks
                     visibleCount++;
         }
 
-        // Find the first visible root (= main panel)
         int mainRootIdx = -1;
         for (int r = 0; r < (int)layerTree_.size(); ++r)
         {
@@ -183,13 +173,11 @@ namespace stnks
             auto* rootLayer = layers_[rootLayerIdx].get();
             bool isMain = (r == mainRootIdx);
 
-            // Use the layer index as a stable ID (won't collide)
             ImGui::PushID(rootLayerIdx);
 
             if (isMain)
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 0.9f, 0.5f, 1.f));
 
-            // Checkbox
             bool checked = rootLayer->visible;
             if (ImGui::Checkbox("##vis", &checked))
             {
@@ -198,10 +186,8 @@ namespace stnks
             }
             ImGui::SameLine();
 
-            // Selectable (drag source + drop target)
             ImGui::Selectable(rootLayer->name.c_str(), false, 0, ImVec2(110, 0));
 
-            // Drag source
             if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None))
             {
                 ImGui::SetDragDropPayload("LAYER_DND", &rootLayerIdx, sizeof(int));
@@ -209,7 +195,6 @@ namespace stnks
                 ImGui::EndDragDropSource();
             }
 
-            // Drop target: merge dragged layer into this root
             if (ImGui::BeginDragDropTarget())
             {
                 if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("LAYER_DND"))
@@ -218,7 +203,6 @@ namespace stnks
                     if (srcIdx != rootLayerIdx)
                     {
                         DetachFromTree(srcIdx);
-                        // After detach, find our root again (index may have shifted)
                         for (int rr = 0; rr < (int)layerTree_.size(); ++rr)
                         {
                             if (layerTree_[rr].layerIdx == rootLayerIdx)
@@ -234,14 +218,12 @@ namespace stnks
                 ImGui::EndDragDropTarget();
             }
 
-            // Role label
             ImGui::SameLine(130.f);
             if (isMain)
                 ImGui::TextDisabled("[main]");
             else
                 ImGui::TextDisabled(rootLayer->visible ? "[sub]" : "[off]");
 
-            // Move up/down buttons
             ImGui::SameLine(175.f);
             {
                 bool canUp = (r > 0);
@@ -270,10 +252,8 @@ namespace stnks
             if (isMain)
                 ImGui::PopStyleColor();
 
-            // Children (merged layers)
             if (!mutated)
             {
-                // Re-read children count from tree (safe since no mutation yet)
                 int numChildren = (int)layerTree_[r].children.size();
                 for (int ci = 0; ci < numChildren && !mutated; ++ci)
                 {
@@ -281,7 +261,7 @@ namespace stnks
                     if (childIdx < 0 || childIdx >= (int)layers_.size()) continue;
                     auto* childLayer = layers_[childIdx].get();
 
-                    ImGui::PushID(childIdx + 10000);  // Offset avoids collision with root IDs
+                    ImGui::PushID(childIdx + 10000);
                     ImGui::Indent(20.f);
 
                     bool cVis = childLayer->visible;
@@ -293,7 +273,6 @@ namespace stnks
                     ImGui::SameLine();
                     ImGui::TextUnformatted(childLayer->name.c_str());
 
-                    // Child drag source
                     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None))
                     {
                         ImGui::SetDragDropPayload("LAYER_DND", &childIdx, sizeof(int));
@@ -304,7 +283,6 @@ namespace stnks
                     ImGui::SameLine();
                     ImGui::TextDisabled("[merged]");
 
-                    // Unmerge button
                     ImGui::SameLine();
                     if (ImGui::SmallButton("x"))
                     {
@@ -321,10 +299,9 @@ namespace stnks
                 }
             }
 
-            ImGui::PopID();  // rootLayerIdx
+            ImGui::PopID();
         }
 
-        // Drop zone at bottom
         ImGui::Separator();
         ImGui::Selectable("Drop here = new panel", false, 0, ImVec2(0, 20));
         if (ImGui::BeginDragDropTarget())
@@ -351,7 +328,6 @@ namespace stnks
         int total = (int)data_.candles.size();
         candleIdx = std::clamp(candleIdx, 0, total - 1);
 
-        // Center the candle in the visible window
         viewport_.visibleStart = std::clamp(
             candleIdx - viewport_.visibleCount / 2,
             0, std::max(0, total - viewport_.visibleCount));
@@ -366,10 +342,10 @@ namespace stnks
     {
         if (priceLo >= priceHi) return;
         float range = priceHi - priceLo;
-        float margin = range * 0.15f; // 15% margin for comfortable viewing
+        float margin = range * 0.15f;
         viewport_.priceMin = priceLo - margin;
         viewport_.priceMax = priceHi + margin;
-        yLocked_ = true; // Prevent AutoScalePrice from overriding
+        yLocked_ = true;
     }
 
     void StockChart::SetEventMarkers(const std::vector<GraphEvent>& events)
@@ -383,7 +359,6 @@ namespace stnks
 
         int end = std::min(vp.visibleStart + vp.visibleCount, (int)data_.candles.size());
 
-        // Draw highlight ring on focused event candle
         if (highlightCandleIdx_ >= vp.visibleStart && highlightCandleIdx_ < end && highlightTimer_ > 0.f)
         {
             float alpha = std::min(1.f, highlightTimer_);
@@ -425,7 +400,6 @@ namespace stnks
             float xMid = vp.IndexToX(ri) + vp.candleWidth * 0.5f;
             const auto& candle = data_.candles[idx];
 
-            // Position based on highest severity in group
             float yPos;
             ImU32 dotColor;
             switch (group.maxSeverity)
@@ -451,7 +425,6 @@ namespace stnks
             float radius = count > 1 ? 5.f : 3.f;
             drawList->AddCircleFilled(ImVec2(xMid, yPos), radius, dotColor);
 
-            // Count badge for stacked events (2+)
             if (count > 1)
             {
                 char badge[8];
@@ -464,12 +437,12 @@ namespace stnks
                     IM_COL32(255, 255, 255, 200), badge);
             }
 
-            // Tooltip on hover — shows all events in group
             ImVec2 mousePos = ImGui::GetMousePos();
             float dx = mousePos.x - xMid;
             float dy = mousePos.y - yPos;
             if (dx * dx + dy * dy < (radius + 5.f) * (radius + 5.f))
             {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
                 ImGui::BeginTooltip();
                 if (count > 1)
                     ImGui::TextDisabled("%d events on this candle:", count);
@@ -487,6 +460,11 @@ namespace stnks
                     }
                 }
                 ImGui::EndTooltip();
+
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && onEventMarkerClicked)
+                {
+                    onEventMarkerClicked(data_.symbol, idx);
+                }
             }
         }
     }
@@ -506,7 +484,6 @@ namespace stnks
             strategyLayer_->strategies = strategies;
     }
 
-    // ── Nice step helpers ──────────────────────────────────────────────────────
 
     float StockChart::NiceStep(float range, float targetLines)
     {
@@ -525,7 +502,6 @@ namespace stnks
         return nice * magnitude;
     }
 
-    // ── Draw ───────────────────────────────────────────────────────────────────
 
     void StockChart::Draw(const char* label)
     {
@@ -535,11 +511,9 @@ namespace stnks
             return;
         }
 
-        // Apply layer tree if changed or not yet built
         if (layerTreeDirty_ || layerTree_.empty())
             ApplyLayerTree();
 
-        // Header (skipped when detached chart provides its own toolbar)
         if (!suppressHeader)
         {
             const auto& last = data_.candles.back();
@@ -569,7 +543,6 @@ namespace stnks
             }
         }
 
-        // Layout — compute sub-panel heights from tree roots
         ImVec2 avail = ImGui::GetContentRegionAvail();
         float totalSubHeight = 0.f;
         for (auto& node : layerTree_)
@@ -578,7 +551,6 @@ namespace stnks
             auto& rootLayer = layers_[node.layerIdx];
             if (rootLayer->height > 0.f)
             {
-                // Check if root or any child is visible
                 bool anyVis = rootLayer->visible;
                 for (int ci : node.children)
                     if (ci >= 0 && ci < (int)layers_.size() && layers_[ci]->visible) anyVis = true;
@@ -608,7 +580,6 @@ namespace stnks
         if (!yLocked_)
             AutoScalePrice();
 
-        // Begin child
         ImGui::BeginChild(label, avail, false,
                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
@@ -618,7 +589,6 @@ namespace stnks
         panelRegions_.clear();
         chartLeft_ = windowPos.x;
 
-        // --- Main chart ---
         viewport_.chartOrigin = windowPos;
         viewport_.chartSize   = ImVec2(chartWidth_, mainChartHeight);
         totalChartTop_ = windowPos.y;
@@ -626,7 +596,6 @@ namespace stnks
         panelRegions_.push_back({windowPos, ImVec2(chartWidth_, mainChartHeight), nullptr,
                                  viewport_.priceMin, viewport_.priceMax, true});
 
-        // Fancy grid background for main chart
         ChartGrid::DrawFull(drawList, viewport_,
                             viewport_.visibleStart, viewport_.visibleCount,
                             (int)data_.candles.size(), chartWidth_,
@@ -636,8 +605,6 @@ namespace stnks
 
         ResolveFocusedCandle();
 
-        // Draw main panel layers (root + merged children with height == 0)
-        // Check if the main panel contains a price-based layer (Candlestick)
         bool mainHasPriceLayer = false;
         for (auto& node : layerTree_)
         {
@@ -657,7 +624,6 @@ namespace stnks
                     layers_[ci]->Draw(drawList, viewport_, data_);
         }
 
-        // Draw Strategies and event markers in the main area only if it has a price-based layer
         if (mainHasPriceLayer)
         {
             for (auto& layer : layers_)
@@ -666,7 +632,6 @@ namespace stnks
             DrawEventMarkers(drawList, viewport_);
         }
 
-        // --- Sub-panels with draggable dividers (tree-based) ---
         float yOffset = windowPos.y + mainChartHeight;
         int dividerIdx = 0;
 
@@ -674,15 +639,13 @@ namespace stnks
         {
             if (node.layerIdx < 0 || node.layerIdx >= (int)layers_.size()) continue;
             auto& rootLayer = layers_[node.layerIdx];
-            if (rootLayer->height <= 0.f) continue; // Skip main panel root
+            if (rootLayer->height <= 0.f) continue;
 
-            // Check if root or any child is visible
             bool anyVis = rootLayer->visible;
             for (int ci : node.children)
                 if (ci >= 0 && ci < (int)layers_.size() && layers_[ci]->visible) anyVis = true;
             if (!anyVis) continue;
 
-            // Divider hit area (6px tall, centered on the separator line)
             float dividerY = yOffset;
             ImVec2 divMin(windowPos.x, dividerY - 3.f);
             ImVec2 divMax(windowPos.x + chartWidth_, dividerY + 3.f);
@@ -713,7 +676,6 @@ namespace stnks
                 }
             }
 
-            // Draw divider line
             ImU32 divColor = (divHovered || divDragging)
                 ? IM_COL32(100, 120, 180, 255)
                 : IM_COL32(60, 60, 70, 255);
@@ -724,7 +686,6 @@ namespace stnks
 
             yOffset += 4.f;
 
-            // Build panel label: "Root + Child1 + Child2"
             std::string panelLabel = rootLayer->name;
             for (int ci : node.children)
             {
@@ -734,7 +695,6 @@ namespace stnks
             drawList->AddText(ImVec2(windowPos.x + 4, yOffset + 2),
                               IM_COL32(140, 140, 160, 200), panelLabel.c_str());
 
-            // "Tear out" button
             if (onIndicatorTearOut)
             {
                 ImVec2 nameSize = ImGui::CalcTextSize(panelLabel.c_str());
@@ -767,7 +727,6 @@ namespace stnks
             subVp.chartOrigin = ImVec2(windowPos.x, yOffset);
             subVp.chartSize   = ImVec2(chartWidth_, rootLayer->height);
 
-            // Get value range from root layer (primary axis for the panel)
             float yMin = 0.f, yMax = 1.f;
             bool hasRange = rootLayer->GetValueRange(subVp, data_, yMin, yMax);
 
@@ -780,7 +739,6 @@ namespace stnks
             panelRegions_.push_back({subVp.chartOrigin, subVp.chartSize, rootLayer.get(),
                                      yMin, yMax, hasRange});
 
-            // Grid
             if (hasRange)
             {
                 ChartGrid::DrawFull(drawList, subVp,
@@ -797,11 +755,9 @@ namespace stnks
                                             (int)data_.candles.size(), chartWidth_);
             }
 
-            // Draw root layer
             if (rootLayer->visible)
                 rootLayer->Draw(drawList, subVp, data_);
 
-            // Draw merged children in the same viewport
             for (int ci : node.children)
             {
                 if (ci < 0 || ci >= (int)layers_.size()) continue;
@@ -820,9 +776,6 @@ namespace stnks
 
                 if (panelHasPrice)
                 {
-                    // Use the sub-panel viewport with proper price scaling
-                    // (subVp already has price range from Candlestick's GetValueRange
-                    //  or we compute it from candle data)
                     ChartViewport priceVp = subVp;
                     int end = std::min(viewport_.visibleStart + viewport_.visibleCount,
                                        (int)data_.candles.size());
@@ -851,7 +804,6 @@ namespace stnks
 
         totalChartBottom_ = yOffset;
 
-        // --- Time axis ---
         ChartViewport timeVp = viewport_;
         timeVp.chartOrigin = ImVec2(windowPos.x, yOffset);
         timeVp.chartSize   = ImVec2(chartWidth_, 20.f);
@@ -864,7 +816,6 @@ namespace stnks
         ImGui::EndChild();
     }
 
-    // ── Input ──────────────────────────────────────────────────────────────────
 
     void StockChart::HandleInput()
     {
@@ -874,15 +825,13 @@ namespace stnks
 
         if (io.MouseWheel != 0.f)
         {
-            // Consume the wheel so parent windows don't also scroll
             ImGui::SetWindowFocus();
 
             if (io.KeyCtrl)
             {
-                // Ctrl+scroll: Y-axis scroll (pan price range up/down)
                 float priceRange = viewport_.priceMax - viewport_.priceMin;
-                float scrollAmount = priceRange * 0.05f;  // 5% of visible range per tick
-                if (io.MouseWheel > 0.f) scrollAmount = -scrollAmount;  // scroll up = higher prices
+                float scrollAmount = priceRange * 0.05f;
+                if (io.MouseWheel > 0.f) scrollAmount = -scrollAmount;
 
                 viewport_.priceMin += scrollAmount;
                 viewport_.priceMax += scrollAmount;
@@ -890,20 +839,17 @@ namespace stnks
             }
             else if (io.KeyShift)
             {
-                // Proportional zoom anchored to mouse X position
+                // Zoom anchored to mouse X position
                 float mouseRelX = (io.MousePos.x - chartLeft_) / chartWidth_;
                 mouseRelX = std::clamp(mouseRelX, 0.f, 1.f);
 
-                // The candle under the mouse cursor (fractional)
                 float anchorCandle = (float)viewport_.visibleStart + mouseRelX * (float)viewport_.visibleCount;
 
-                // Scale visible count proportionally
                 float factor = (io.MouseWheel > 0.f) ? (1.f - zoomSpeed_) : (1.f + zoomSpeed_);
                 int newCount = (int)std::round((float)viewport_.visibleCount * factor);
                 newCount = std::clamp(newCount, minVisibleCandles_,
                                       std::min(maxVisibleCandles_, (int)data_.candles.size()));
 
-                // Adjust start so the anchor candle stays under the mouse
                 int newStart = (int)std::round(anchorCandle - mouseRelX * (float)newCount);
                 int maxStart = std::max(0, (int)data_.candles.size() - newCount);
                 newStart = std::clamp(newStart, 0, maxStart);
@@ -913,7 +859,6 @@ namespace stnks
             }
             else
             {
-                // Scroll speed proportional to visible range
                 int scroll = std::max(1, viewport_.visibleCount / 20);
                 if (io.MouseWheel > 0.f) scroll = -scroll;
 
@@ -922,7 +867,6 @@ namespace stnks
                     viewport_.visibleStart + scroll, 0, maxStart);
             }
 
-            // Clear the wheel delta so no parent window processes it
             io.MouseWheel = 0.f;
             io.MouseWheelH = 0.f;
         }
@@ -934,7 +878,7 @@ namespace stnks
                 isDragging_     = true;
                 dragStartX_     = io.MousePos.x;
                 dragStartIndex_ = viewport_.visibleStart;
-                dragCandleStep_ = viewport_.CandleStep();  // Cache step at drag start
+                dragCandleStep_ = viewport_.CandleStep();
             }
 
             float dx = io.MousePos.x - dragStartX_;
@@ -949,11 +893,9 @@ namespace stnks
             isDragging_ = false;
         }
 
-        // Double-click middle mouse to reset view
         if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Middle))
             ResetView();
 
-        // Right-click opens strategy context menu
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && strategyLayer_)
         {
             float clickPrice = viewport_.YToPrice(io.MousePos.y);
@@ -967,41 +909,32 @@ namespace stnks
         }
     }
 
-    // ── Grid ───────────────────────────────────────────────────────────────────
 
     void StockChart::DrawGrid(ImDrawList* drawList, const ChartViewport& vp)
     {
         float range = vp.priceMax - vp.priceMin;
         if (range <= 0.f) return;
 
-        // ── Horizontal (price) grid ──────────────────────────────────────────
 
-        // Adaptive target: more lines as chart is taller, but clamped
         float targetHLines = std::clamp(vp.chartSize.y / 80.f, 4.f, 10.f);
         float majorStep = NiceStep(range, targetHLines);
 
-        // Minimum pixel spacing between grid lines to prevent infinite density
         constexpr float kMinGridPixelSpacing = 20.f;
         float pixelsPerUnit = vp.chartSize.y / range;
 
-        // Clamp: if majorStep would produce lines closer than kMinGridPixelSpacing, increase it
         while (majorStep * pixelsPerUnit < kMinGridPixelSpacing && majorStep < range)
             majorStep *= 2.f;
 
-        // Minor step: subdivide major into 4 or 5 (whichever NiceStep prefers)
         float minorStep = majorStep / 4.f;
-        // Prevent minor lines from being too dense
         if (minorStep * pixelsPerUnit < kMinGridPixelSpacing)
             minorStep = majorStep / 2.f;
         bool showMinor = (minorStep * pixelsPerUnit >= kMinGridPixelSpacing);
 
-        // Draw minor horizontal lines first (behind major)
         if (showMinor)
         {
             float startMinor = std::ceil(vp.priceMin / minorStep) * minorStep;
             for (float p = startMinor; p <= vp.priceMax; p += minorStep)
             {
-                // Skip positions that coincide with major lines
                 float nearestMajor = std::round(p / majorStep) * majorStep;
                 if (std::abs(p - nearestMajor) < minorStep * 0.3f) continue;
 
@@ -1014,7 +947,6 @@ namespace stnks
             }
         }
 
-        // Draw major horizontal lines
         float startMajor = std::ceil(vp.priceMin / majorStep) * majorStep;
         for (float p = startMajor; p <= vp.priceMax; p += majorStep)
         {
@@ -1026,12 +958,10 @@ namespace stnks
                 kGridMajorColor, 1.0f);
         }
 
-        // ── Vertical (time) grid ─────────────────────────────────────────────
 
         float targetVLines = std::clamp(chartWidth_ / 140.f, 3.f, 8.f);
         int vStep = std::max(1, (int)std::round((float)viewport_.visibleCount / targetVLines));
 
-        // Snap to nice candle intervals
         int niceVStep = 1;
         int candidates[] = {1, 2, 5, 10, 20, 50, 100, 200, 500};
         for (int c : candidates)
@@ -1040,7 +970,6 @@ namespace stnks
             niceVStep = c;
         }
 
-        // Minimum spacing for vertical lines too
         float pixelsPerCandle = vp.candleWidth + vp.candleSpacing;
         float vLineSpacing = niceVStep * pixelsPerCandle;
         while (vLineSpacing < kMinGridPixelSpacing && niceVStep < viewport_.visibleCount)
@@ -1052,7 +981,6 @@ namespace stnks
         int end = std::min(vp.visibleStart + vp.visibleCount, (int)data_.candles.size());
         int firstAligned = vp.visibleStart - (vp.visibleStart % niceVStep) + niceVStep;
 
-        // Minor vertical lines (halfway between majors)
         if (showMinor)
         {
             int minorVStep = niceVStep / 2;
@@ -1061,7 +989,6 @@ namespace stnks
                 int firstMinor = vp.visibleStart - (vp.visibleStart % minorVStep) + minorVStep;
                 for (int i = firstMinor; i < end; i += minorVStep)
                 {
-                    // Skip major positions
                     if (niceVStep > 0 && (i % niceVStep) == 0) continue;
                     int ri = i - vp.visibleStart;
                     float x = vp.IndexToX(ri) + vp.candleWidth * 0.5f;
@@ -1073,7 +1000,6 @@ namespace stnks
             }
         }
 
-        // Major vertical lines
         for (int i = firstAligned; i < end; i += niceVStep)
         {
             int ri = i - vp.visibleStart;
@@ -1085,24 +1011,20 @@ namespace stnks
         }
     }
 
-    // ── Price axis ─────────────────────────────────────────────────────────────
 
     void StockChart::DrawPriceAxis(ImDrawList* drawList, const ChartViewport& vp)
     {
         float range = vp.priceMax - vp.priceMin;
         if (range <= 0.f) return;
 
-        // Match grid density (same logic as DrawGrid)
         float targetLines = std::clamp(vp.chartSize.y / 80.f, 4.f, 10.f);
         float majorStep = NiceStep(range, targetLines);
 
-        // Clamp to prevent overly dense labels (same as grid)
         constexpr float kMinLabelSpacing = 20.f;
         float pixelsPerUnit = vp.chartSize.y / range;
         while (majorStep * pixelsPerUnit < kMinLabelSpacing && majorStep < range)
             majorStep *= 2.f;
 
-        // Determine decimal places from step size
         int decimals = 2;
         if (majorStep >= 10.f)       decimals = 0;
         else if (majorStep >= 1.f)   decimals = 1;
@@ -1120,11 +1042,9 @@ namespace stnks
         {
             float y = vp.PriceToY(p);
 
-            // Skip labels too close to top/bottom edges
             if (y < vp.chartOrigin.y + 6.f || y > vp.chartOrigin.y + vp.chartSize.y - 6.f)
                 continue;
 
-            // Small tick mark on the grid boundary
             drawList->AddLine(
                 ImVec2(vp.chartOrigin.x + vp.chartSize.x, y),
                 ImVec2(vp.chartOrigin.x + vp.chartSize.x + 3.f, y),
@@ -1136,7 +1056,6 @@ namespace stnks
         }
     }
 
-    // ── Value axis (generic — for sub-panels with arbitrary Y range) ──────────
 
     void StockChart::DrawValueAxis(ImDrawList* drawList, const ChartViewport& vp,
                                    float valMin, float valMax)
@@ -1152,7 +1071,6 @@ namespace stnks
         while (majorStep * pxPerUnit < kMinPx && majorStep < range)
             majorStep *= 2.f;
 
-        // Determine formatting
         int decimals;
         if (majorStep >= 1000.f)      decimals = 0;
         else if (majorStep >= 10.f)   decimals = 0;
@@ -1161,7 +1079,6 @@ namespace stnks
         else if (majorStep >= 0.01f)  decimals = 3;
         else                          decimals = 4;
 
-        // Use "K" suffix for large numbers (volume)
         bool useK = (valMax >= 10000.f);
         bool useM = (valMax >= 10000000.f);
 
@@ -1176,7 +1093,6 @@ namespace stnks
             if (y < vp.chartOrigin.y + 6.f || y > vp.chartOrigin.y + vp.chartSize.y - 6.f)
                 continue;
 
-            // Tick mark
             drawList->AddLine(
                 ImVec2(vp.chartOrigin.x + vp.chartSize.x, y),
                 ImVec2(vp.chartOrigin.x + vp.chartSize.x + 3.f, y),
@@ -1197,15 +1113,12 @@ namespace stnks
         }
     }
 
-    // ── Time axis ──────────────────────────────────────────────────────────────
 
     void StockChart::DrawTimeAxis(ImDrawList* drawList, const ChartViewport& vp)
     {
-        // Match vertical grid density — sparse labels
         float targetLabels = std::clamp(chartWidth_ / 160.f, 3.f, 6.f);
         int labelStep = std::max(1, (int)std::round((float)viewport_.visibleCount / targetLabels));
 
-        // Snap to nice intervals
         int niceStep = 1;
         int candidates[] = {1, 2, 5, 10, 20, 50, 100, 200, 500};
         for (int c : candidates)
@@ -1217,9 +1130,6 @@ namespace stnks
         int end = std::min(vp.visibleStart + vp.visibleCount, (int)data_.candles.size());
         int firstAligned = vp.visibleStart - (vp.visibleStart % niceStep) + niceStep;
 
-        // Choose date format based on data granularity and zoom level
-        // "1m","5m","15m","30m" are intraday minutes; "1h" is intraday hours
-        // "1d" is daily; "1wk" is weekly; "1mo" is monthly
         bool intraday = (data_.interval.find('m') != std::string::npos &&
                          data_.interval.find("mo") == std::string::npos) ||
                         data_.interval.find('h') != std::string::npos;
@@ -1256,7 +1166,6 @@ namespace stnks
                               kAxisTextColor, buf);
         }
 
-        // Focused candle date highlight (shows on hovered + synced charts)
         if (viewport_.focusedCandle >= 0 &&
             viewport_.focusedCandle < (int)data_.candles.size())
         {
@@ -1286,7 +1195,6 @@ namespace stnks
         }
     }
 
-    // ── Focus / Crosshair / Tooltip ────────────────────────────────────────────
 
     void StockChart::ResolveFocusedCandle()
     {
@@ -1307,7 +1215,6 @@ namespace stnks
                 {
                     viewport_.focusedCandle = candleIdx;
 
-                    // Write to shared crosshair so other charts can sync
                     if (sharedCrosshair_)
                         sharedCrosshair_->Set(data_.symbol, candleIdx,
                                               data_.candles[candleIdx].timestamp);
@@ -1318,7 +1225,6 @@ namespace stnks
                  sharedCrosshair_->symbol == data_.symbol &&
                  !data_.candles.empty())
         {
-            // Not hovered — read from shared crosshair (another chart is driving)
             // Match by timestamp since candle indices may differ across timeframes
             int64_t targetTs = sharedCrosshair_->timestamp;
             int bestIdx = -1;
@@ -1338,11 +1244,9 @@ namespace stnks
                 viewport_.focusedCandle = bestIdx;
         }
 
-        // Clear shared crosshair if nothing is hovered anywhere
         if (!hovered && sharedCrosshair_ && sharedCrosshair_->active)
         {
-            // Only clear if WE were the one who set it (check symbol match)
-            // Actually, don't clear here — let the hovering chart clear on its own
+            // Don't clear here — let the hovering chart clear on its own
         }
     }
 
@@ -1355,14 +1259,12 @@ namespace stnks
         float focusX = viewport_.FocusedX();
         if (focusX < 0.f) return;
 
-        // Vertical crosshair line (always drawn, local or synced)
-        ImU32 lineColor = hovered ? kCrosshairColor : IM_COL32(90, 110, 140, 80); // Dimmer when synced
+        ImU32 lineColor = hovered ? kCrosshairColor : IM_COL32(90, 110, 140, 80);
         drawList->AddLine(
             ImVec2(focusX, totalChartTop_),
             ImVec2(focusX, totalChartBottom_),
             lineColor, 1.0f);
 
-        // Horizontal line + value badges only when locally hovered
         if (!hovered) return;
 
         ImVec2 mouse = ImGui::GetMousePos();
@@ -1377,7 +1279,6 @@ namespace stnks
                     ImVec2(region.origin.x + region.size.x, mouse.y),
                     kCrosshairColor, 1.0f);
 
-                // Show value badge on the right axis for any panel with a range
                 if (region.hasRange)
                 {
                     float range = region.valMax - region.valMin;
@@ -1389,7 +1290,6 @@ namespace stnks
                         char buf[32];
                         if (region.layer == nullptr)
                         {
-                            // Main chart: use price formatting
                             FmtPrice(buf, sizeof(buf), value, data_.symbol);
                         }
                         else if (region.valMax >= 10000000.f)
@@ -1412,21 +1312,18 @@ namespace stnks
             }
         }
 
-        // --- Fancy close-price badge on the price axis ---
         const auto& fc = data_.candles[viewport_.focusedCandle];
         bool bullish = fc.IsBullish();
-        ImU32 candleCol = bullish ? IM_COL32(38, 166, 91, 255)   // green
-                                  : IM_COL32(214, 48, 48, 255);  // red
+        ImU32 candleCol = bullish ? IM_COL32(38, 166, 91, 255)
+                                  : IM_COL32(214, 48, 48, 255);
         ImU32 candleColDim = bullish ? IM_COL32(38, 166, 91, 60)
                                      : IM_COL32(214, 48, 48, 60);
 
         float closeY = viewport_.PriceToY(fc.close);
 
-        // Only draw if close is within the main chart panel
         if (closeY >= viewport_.chartOrigin.y &&
             closeY <= viewport_.chartOrigin.y + viewport_.chartSize.y)
         {
-            // Dotted horizontal line from candle to axis
             float lineX0 = focusX;
             float lineX1 = viewport_.chartOrigin.x + viewport_.chartSize.x;
             for (float x = lineX0; x < lineX1; x += 6.f)
@@ -1436,33 +1333,28 @@ namespace stnks
                                   candleColDim, 1.0f);
             }
 
-            // Price badge with rounded rect + triangle pointer
             float axisX = viewport_.chartOrigin.x + viewport_.chartSize.x + 2.f;
             float badgeW = rightAxisWidth_ - 4.f;
             float badgeH = 18.f;
             float by = closeY - badgeH * 0.5f;
 
-            // Triangle pointer on the left edge
             drawList->AddTriangleFilled(
                 ImVec2(axisX - 5.f, closeY),
                 ImVec2(axisX, closeY - 5.f),
                 ImVec2(axisX, closeY + 5.f),
                 candleCol);
 
-            // Badge background
             drawList->AddRectFilled(
                 ImVec2(axisX, by),
                 ImVec2(axisX + badgeW, by + badgeH),
                 candleCol, 3.f);
 
-            // Badge border glow
             drawList->AddRect(
                 ImVec2(axisX, by),
                 ImVec2(axisX + badgeW, by + badgeH),
                 bullish ? IM_COL32(100, 220, 140, 120) : IM_COL32(255, 100, 100, 120),
                 3.f, 0, 1.5f);
 
-            // Price text
             char priceBuf[32];
             FmtPrice(priceBuf, sizeof(priceBuf), fc.close, data_.symbol);
             ImVec2 textSz = ImGui::CalcTextSize(priceBuf);
@@ -1517,7 +1409,6 @@ namespace stnks
     {
         if (data_.candles.empty()) return;
 
-        // Find the main panel root layer (first visible root in tree)
         ChartLayer* mainRoot = nullptr;
         for (auto& node : layerTree_)
         {
@@ -1529,7 +1420,6 @@ namespace stnks
             if (anyVis) { mainRoot = layer.get(); break; }
         }
 
-        // If main root is a non-price layer (RSI, MACD, etc.), use its value range
         bool isPriceLayer = !mainRoot || mainRoot->name == "Candlestick" || mainRoot->name == "Volume";
         if (!isPriceLayer)
         {
@@ -1545,7 +1435,6 @@ namespace stnks
             }
         }
 
-        // Default: scale to candle price range
         int end = std::min(viewport_.visibleStart + viewport_.visibleCount,
                            (int)data_.candles.size());
 

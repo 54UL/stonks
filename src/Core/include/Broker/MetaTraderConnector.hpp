@@ -54,7 +54,6 @@ namespace stnks
         MetaTraderConnector(HttpClient& http);
         ~MetaTraderConnector() override;
 
-        // ── IBrokerConnector ─────────────────────────────────────────────────────
 
         void Initialize(const BrokerConfig& config) override;
         void Connect() override;
@@ -86,7 +85,6 @@ namespace stnks
         uint64_t GetTicksReceived() const override;
         const BrokerConfig& GetConfig() const override { return config_; }
 
-        // ── IBrokerDataSource / IMarketSource ────────────────────────────────────
 
         const char* GetName() const override { return "MetaTrader 5"; }
         bool IsRealtime() const override { return true; }

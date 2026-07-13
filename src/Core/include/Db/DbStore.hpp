@@ -1,26 +1,5 @@
 #pragma once
 
-// DbStore — generic template-based ORM for SQLite.
-//
-// Define a schema once (column name + member pointer + SQL type), and get
-// INSERT, UPDATE, DELETE, SELECT, CREATE TABLE, bind, and read for free.
-//
-// Features:
-//   - Schema-driven CRUD (no manual bind/read code per table)
-//   - Variadic parameter binding (no raw sqlite3_bind_* calls)
-//   - Named queries from .sql files (loaded via SetQueries)
-//   - Type-safe: enums, bools, floats, strings all auto-dispatched
-//
-// Usage:
-//   inline const auto kSchema = db::MakeSchema<MyStruct>("my_table", &MyStruct::id,
-//       db::Col("name",  &MyStruct::name,  "TEXT", "NOT NULL"),
-//       db::Col("value", &MyStruct::value, "REAL", "DEFAULT 0")
-//   );
-//   db::DbStore store(db, kSchema);
-//   store.Insert(obj);
-//   store.Where("value > ?", 10.0f);
-//   store.ExecQuery("mark_done", true, id);
-
 #include <sqlite3.h>
 #include <string>
 #include <vector>
@@ -31,9 +10,6 @@
 
 namespace stnks::db
 {
-    // ── Field descriptor ──────────────────────────────────────────────────
-    // Binds a SQL column to a C++ struct member via pointer-to-member.
-
     template<typename T, typename M>
     struct Field
     {
@@ -50,8 +26,6 @@ namespace stnks::db
         return {col, type, constraints, mem};
     }
 
-    // ── Schema descriptor ─────────────────────────────────────────────────
-
     template<typename T, typename... Fs>
     struct Schema
     {
@@ -66,9 +40,6 @@ namespace stnks::db
     {
         return Schema<T, Field<T, Ms>...>{table, id, std::make_tuple(fs...)};
     }
-
-    // ── Member-pointer bind/read (schema-driven) ──────────────────────────
-    // Used internally by DbStore for INSERT/UPDATE/SELECT on struct fields.
 
     template<typename T, typename M>
     void BindValue(sqlite3_stmt* stmt, int idx, const T& obj, M T::* member)
@@ -115,10 +86,6 @@ namespace stnks::db
             obj.*member = static_cast<V>(sqlite3_column_int(stmt, col));
     }
 
-    // ── Standalone parameter binding (variadic) ───────────────────────────
-    // For binding raw values to ? placeholders in custom queries.
-    // Supports: string, const char*, int, int64_t, float, double, bool, enums.
-
     inline void BindOne(sqlite3_stmt* s, int i, const std::string& v)
     { sqlite3_bind_text(s, i, v.c_str(), -1, SQLITE_TRANSIENT); }
 
@@ -140,22 +107,16 @@ namespace stnks::db
     inline void BindOne(sqlite3_stmt* s, int i, bool v)
     { sqlite3_bind_int(s, i, v ? 1 : 0); }
 
-    // Enum catch-all
     template<typename E, std::enable_if_t<std::is_enum_v<E>, int> = 0>
     void BindOne(sqlite3_stmt* s, int i, E v)
     { sqlite3_bind_int(s, i, static_cast<int>(v)); }
 
-    // Bind all variadic args to params 1..N (left-to-right, guaranteed by comma fold)
     template<typename... Args>
     void BindParams(sqlite3_stmt* stmt, const Args&... args)
     {
         int idx = 1;
         (BindOne(stmt, idx++, args), ...);
     }
-
-    // ── DbStore ───────────────────────────────────────────────────────────
-    // Generic CRUD store for any struct T described by a Schema.
-    // Caller owns the sqlite3* handle.
 
     template<typename T, typename SchemaT>
     class DbStore
@@ -172,8 +133,6 @@ namespace stnks::db
             sqlCreateTable_ = BuildCreateTable();
         }
 
-        // ── DDL ────────────────────────────────────────────────────────────
-
         const std::string& CreateTableSQL() const { return sqlCreateTable_; }
 
         bool CreateTable() const
@@ -186,10 +145,6 @@ namespace stnks::db
             return true;
         }
 
-        // ── Named queries (.sql files) ─────────────────────────────────────
-        // Loaded externally (by Database) and injected here.
-        // Keys are filenames without extension (e.g. "mark_triggered").
-
         void SetQueries(std::unordered_map<std::string, std::string> queries)
         {
             queries_ = std::move(queries);
@@ -200,7 +155,6 @@ namespace stnks::db
             return queries_.count(name) > 0;
         }
 
-        // Execute a named query (non-SELECT) with variadic param binding.
         template<typename... Args>
         bool ExecQuery(const std::string& name, const Args&... args) const
         {
@@ -209,7 +163,6 @@ namespace stnks::db
             return Exec(it->second, args...);
         }
 
-        // Run a named SELECT query, returning rows via schema ReadRow.
         template<typename... Args>
         std::vector<T> RunQuery(const std::string& name, const Args&... args) const
         {
@@ -217,8 +170,6 @@ namespace stnks::db
             if (it == queries_.end()) return {};
             return RunSelect(it->second, args...);
         }
-
-        // ── CRUD ───────────────────────────────────────────────────────────
 
         int64_t Insert(const T& obj) const
         {
@@ -257,8 +208,6 @@ namespace stnks::db
             return ok;
         }
 
-        // ── Queries ────────────────────────────────────────────────────────
-
         T GetById(int64_t id) const
         {
             sqlite3_stmt* stmt = nullptr;
@@ -272,7 +221,6 @@ namespace stnks::db
             return obj;
         }
 
-        // SELECT all rows with optional suffix (ORDER BY, LIMIT, etc.)
         std::vector<T> GetAll(const std::string& suffix = "") const
         {
             std::string sql = sqlSelectBase_;
@@ -281,21 +229,12 @@ namespace stnks::db
             return RunSelect(sql);
         }
 
-        // SELECT with WHERE clause + variadic param binding.
-        // The clause can include ORDER BY, LIMIT, etc. after the conditions.
-        //   store.Where("status=0 AND enabled=1 ORDER BY priority ASC");
-        //   store.Where("symbol=? ORDER BY created_at DESC", symbol);
-        //   store.Where("parent_id=? ORDER BY priority ASC", parentId);
         template<typename... Args>
         std::vector<T> Where(const std::string& clause, const Args&... args) const
         {
             std::string sql = sqlSelectBase_ + " WHERE " + clause + ";";
             return RunSelect(sql, args...);
         }
-
-        // ── Raw exec with variadic binding ─────────────────────────────────
-        // For custom UPDATE/DELETE/INSERT statements.
-        //   store.Exec("UPDATE t SET status=? WHERE id=?", status, id);
 
         template<typename... Args>
         bool Exec(const std::string& sql, const Args&... args) const
@@ -310,12 +249,42 @@ namespace stnks::db
             return ok;
         }
 
+        template<typename... Args>
+        int64_t Count(const std::string& clause = "", const Args&... args) const
+        {
+            std::string sql = "SELECT COUNT(*) FROM " + std::string(schema_.tableName);
+            if (!clause.empty()) sql += " WHERE " + clause;
+            sql += ";";
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK)
+                return 0;
+            if constexpr (sizeof...(args) > 0)
+                BindParams(stmt, args...);
+            int64_t count = 0;
+            if (sqlite3_step(stmt) == SQLITE_ROW)
+                count = sqlite3_column_int64(stmt, 0);
+            sqlite3_finalize(stmt);
+            return count;
+        }
+
+        template<typename... Args>
+        bool Exists(const std::string& clause, const Args&... args) const
+        {
+            return Count(clause, args...) > 0;
+        }
+
+        template<typename... Args>
+        T FindOne(const std::string& clause, const Args&... args) const
+        {
+            std::string sql = sqlSelectBase_ + " WHERE " + clause + " LIMIT 1;";
+            auto rows = RunSelect(sql, args...);
+            return rows.empty() ? T{} : rows.front();
+        }
+
         const std::string& SelectBase() const { return sqlSelectBase_; }
         const SchemaT& GetSchema() const { return schema_; }
 
     private:
-        // ── SQL builders ───────────────────────────────────────────────────
-
         std::string ColumnList() const
         {
             std::string s;
@@ -377,8 +346,6 @@ namespace stnks::db
             return ddl;
         }
 
-        // ── Schema bind / read ─────────────────────────────────────────────
-
         template<std::size_t... Is>
         void BindImpl(sqlite3_stmt* stmt, const T& obj, std::index_sequence<Is...>) const
         {
@@ -405,8 +372,6 @@ namespace stnks::db
         {
             return ReadImpl(stmt, std::make_index_sequence<SchemaT::fieldCount>{});
         }
-
-        // ── Internal select runner ─────────────────────────────────────────
 
         template<typename... Args>
         std::vector<T> RunSelect(const std::string& sql, const Args&... args) const

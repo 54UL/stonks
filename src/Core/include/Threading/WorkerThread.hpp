@@ -8,7 +8,6 @@
 
 namespace stnks
 {
-    // ── WorkerThread ─────────────────────────────────────────────────────────────
     // A named persistent thread that runs a user-provided function in a loop.
     //
     // The work function should be short-lived per iteration (non-blocking or
@@ -60,7 +59,6 @@ namespace stnks
             state_.store(State::Stopped, std::memory_order_release);
         }
 
-        // ── Accessors ────────────────────────────────────────────────────────────
         const std::string& GetName()  const { return name_; }
         State  GetState()             const { return state_.load(std::memory_order_acquire); }
         float  GetLastDurationMs()    const { return lastDurationMs_.load(std::memory_order_relaxed); }

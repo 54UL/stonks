@@ -68,7 +68,6 @@ namespace stnks
         return "?";
     }
 
-    // ── Pattern Recognition ──────────────────────────────────────────────────
 
     // A single condition in a multi-indicator pattern
     struct PatternCondition

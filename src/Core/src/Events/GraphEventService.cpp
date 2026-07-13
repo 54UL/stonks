@@ -9,14 +9,12 @@
 
 namespace stnks
 {
-    // ── Constructor ──────────────────────────────────────────────────────────
 
     GraphEventService::GraphEventService()
     {
         InitPatterns();
     }
 
-    // ── Built-in Pattern Definitions ─────────────────────────────────────────
 
     void GraphEventService::InitPatterns()
     {
@@ -146,12 +144,11 @@ namespace stnks
         });
     }
 
-    // ── Public API ──────────────────────────────────────────────────────────
 
     void GraphEventService::Scan(const std::string& symbol, const StockQuote& quote)
     {
         int n = (int)quote.candles.size();
-        if (n < 30) return; // Need enough history
+        if (n < 30) return;
 
         std::lock_guard<std::mutex> lock(mutex_);
         auto& state = scanStates_[symbol];
@@ -179,7 +176,6 @@ namespace stnks
             state.firstTimestamp  = 0;
         }
 
-        // Skip if no new candles since last scan
         if (n == state.lastCandleCount && state.lastScannedIdx >= n - 1)
             return;
 
@@ -196,7 +192,6 @@ namespace stnks
         if (!quote.candles.empty())
             state.firstTimestamp = quote.candles.front().timestamp;
 
-        // Pattern recognition runs after all individual scans
         ScanPatterns(symbol, quote.candles);
     }
 
@@ -310,24 +305,21 @@ namespace stnks
         // Caller must hold mutex_
         auto& vec = events_[symbol];
 
-        // Dedup: reject if an event with the same title + candleIdx already exists
         for (const auto& existing : vec)
         {
             if (existing.candleIdx == event.candleIdx &&
                 existing.title == event.title &&
                 existing.source == event.source)
-                return; // Already recorded
+                return;
         }
 
         vec.push_back(event);
         newEvents_.push_back(event);
 
-        // Trim oldest if over limit
         if ((int)vec.size() > maxEventsPerSymbol)
             vec.erase(vec.begin(), vec.begin() + ((int)vec.size() - maxEventsPerSymbol));
     }
 
-    // ── EMA / SMA Helpers ────────────────────────────────────────────────────
 
     std::vector<float> GraphEventService::ComputeEMA(const std::vector<Candle>& candles, int period)
     {
@@ -335,7 +327,6 @@ namespace stnks
         std::vector<float> ema(n, NAN);
         if (n < period) return ema;
 
-        // Seed with SMA
         float sum = 0.f;
         for (int i = 0; i < period; ++i)
             sum += candles[i].close;
@@ -367,7 +358,6 @@ namespace stnks
         return sma;
     }
 
-    // ── Candlestick Patterns ────────────────────────────────────────────────
 
     void GraphEventService::ScanCandles(const std::string& symbol,
                                          const std::vector<Candle>& candles,
@@ -672,7 +662,6 @@ namespace stnks
         }
     }
 
-    // ── Volume Analysis ─────────────────────────────────────────────────────
 
     void GraphEventService::ScanVolume(const std::string& symbol,
                                         const std::vector<Candle>& candles,
@@ -685,7 +674,6 @@ namespace stnks
 
         for (int i = start; i < n; ++i)
         {
-            // 20-period average volume
             float avgVol = 0.f;
             for (int j = i - 20; j < i; ++j)
                 avgVol += candles[j].volume;
@@ -766,7 +754,6 @@ namespace stnks
         }
     }
 
-    // ── RSI Crossovers + Divergence ──────────────────────────────────────────
 
     void GraphEventService::ScanRSI(const std::string& symbol,
                                      const std::vector<Candle>& candles,
@@ -786,7 +773,6 @@ namespace stnks
             float prev = rsi.values[i - 1];
             float curr = rsi.values[i];
 
-            // Crossed into overbought (70)
             if (prev < 70.f && curr >= 70.f)
             {
                 GraphEvent ev;
@@ -844,7 +830,6 @@ namespace stnks
                 Push(symbol, std::move(ev));
             }
 
-            // RSI mid-line cross (50)
             if (prev < 50.f && curr >= 50.f)
             {
                 GraphEvent ev;
@@ -875,15 +860,12 @@ namespace stnks
             }
         }
 
-        // RSI Divergence detection (only on last few candles)
         if (n >= 20)
         {
-            // Look back 10-20 candles for price highs/lows vs RSI highs/lows
             int lookback = std::min(20, n - 1);
             int endIdx = n - 1;
             int startIdx = endIdx - lookback;
 
-            // Find highest price and highest RSI in the lookback window
             float maxPrice = -1e18f, maxRSI = -1e18f;
             int maxPriceIdx = startIdx, maxRSIIdx = startIdx;
             float minPrice = 1e18f, minRSI = 1e18f;
@@ -898,8 +880,6 @@ namespace stnks
                 if (rsi.values[j] < minRSI) { minRSI = rsi.values[j]; minRSIIdx = j; }
             }
 
-            // Bearish divergence: price at new high but RSI at lower high
-            // (latest candle near price high, but RSI peaked earlier)
             if (maxPriceIdx > endIdx - 3 && maxRSIIdx < maxPriceIdx - 2 &&
                 !std::isnan(rsi.values[endIdx]) && rsi.values[endIdx] < maxRSI * 0.95f)
             {
@@ -917,7 +897,6 @@ namespace stnks
                 Push(symbol, std::move(ev));
             }
 
-            // Bullish divergence: price at new low but RSI at higher low
             if (minPriceIdx > endIdx - 3 && minRSIIdx < minPriceIdx - 2 &&
                 !std::isnan(rsi.values[endIdx]) && rsi.values[endIdx] > minRSI * 1.05f)
             {
@@ -937,7 +916,6 @@ namespace stnks
         }
     }
 
-    // ── MACD Crossovers ─────────────────────────────────────────────────────
 
     void GraphEventService::ScanMACD(const std::string& symbol,
                                       const std::vector<Candle>& candles,
@@ -957,7 +935,6 @@ namespace stnks
             float prevHist = macd.histogram[i - 1];
             float currHist = macd.histogram[i];
 
-            // Bullish crossover
             if (prevHist < 0.f && currHist >= 0.f)
             {
                 GraphEvent ev;
@@ -993,7 +970,6 @@ namespace stnks
                 Push(symbol, std::move(ev));
             }
 
-            // Zero line cross
             if (!std::isnan(macd.macd[i]) && !std::isnan(macd.macd[i - 1]))
             {
                 if (macd.macd[i - 1] < 0.f && macd.macd[i] >= 0.f)
@@ -1054,7 +1030,6 @@ namespace stnks
         }
     }
 
-    // ── EMA Crossovers ──────────────────────────────────────────────────────
 
     void GraphEventService::ScanEMA(const std::string& symbol,
                                      const std::vector<Candle>& candles,
@@ -1191,7 +1166,6 @@ namespace stnks
         }
     }
 
-    // ── Bollinger Bands ─────────────────────────────────────────────────────
 
     void GraphEventService::ScanBollinger(const std::string& symbol,
                                            const std::vector<Candle>& candles,
@@ -1361,7 +1335,6 @@ namespace stnks
         }
     }
 
-    // ── Volume Profile Pattern Detection ──────────────────────────────────────
 
     void GraphEventService::ScanVolumeProfile(const std::string& symbol,
                                                const std::vector<Candle>& candles,
@@ -1519,7 +1492,6 @@ namespace stnks
         }
     }
 
-    // ── Pattern Recognition (Fuzzy Multi-Indicator Matching) ─────────────────
 
     void GraphEventService::ScanPatterns(const std::string& symbol,
                                           const std::vector<Candle>& candles)

@@ -18,7 +18,6 @@ namespace fs = std::filesystem;
 
 namespace stnks::db
 {
-    // ── Path resolution ─────────────────────────────────────────────────────
 
     std::string Database::ResolveDbRoot()
     {
@@ -68,7 +67,6 @@ namespace stnks::db
         return {};
     }
 
-    // ── Construction ────────────────────────────────────────────────────────
 
     Database::Database(const std::string& dbName)
         : dbPath_(ResolveDbPath(dbName))
@@ -96,7 +94,6 @@ namespace stnks::db
             sqlite3_close(db_);
     }
 
-    // ── Migrations ──────────────────────────────────────────────────────────
 
     void Database::RunMigrations()
     {
@@ -139,7 +136,6 @@ namespace stnks::db
         runner.Seed(seedsDir.string(), "strategies");
     }
 
-    // ── Query file loading ──────────────────────────────────────────────────
 
     // Validate query name: only alphanumeric + underscore (prevent path traversal)
     static bool IsValidQueryName(const std::string& name)

@@ -25,7 +25,6 @@ namespace stnks
         return db_->GetPath();
     }
 
-    // ── CRUD ────────────────────────────────────────────────────────────────
 
     int64_t StrategyStore::Insert(const Strategy& s)
     {
@@ -55,7 +54,6 @@ namespace stnks
         return store_->Delete(id);
     }
 
-    // ── Queries ─────────────────────────────────────────────────────────────
 
     std::vector<Strategy> StrategyStore::GetAll()
     {

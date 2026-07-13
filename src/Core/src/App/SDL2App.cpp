@@ -375,7 +375,6 @@ namespace stnks
         return &this->glContext_;
     }
 
-    // ── Display settings ─────────────────────────────────────────────────────
 
     void SDL2App::SetWindowMode(WindowMode mode)
     {

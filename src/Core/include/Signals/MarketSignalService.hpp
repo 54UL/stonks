@@ -21,7 +21,6 @@ namespace stnks
     public:
         MarketSignalService();
 
-        // ── Signal ingestion ──────────────────────────────────────────────────
 
         // Process new graph events and convert Alert-level ones into signals.
         // Call after GraphEventService::Scan() produces new events.
@@ -41,7 +40,6 @@ namespace stnks
         // Push a custom/manual signal (from broker events, webhooks, etc.)
         void Push(MarketSignal&& signal);
 
-        // ── Signal access ─────────────────────────────────────────────────────
 
         // Get all signals (most recent first), optionally filtered
         std::vector<MarketSignal> GetAll() const;
@@ -52,7 +50,6 @@ namespace stnks
         int UnreadCount() const;
         int ActionableCount() const;
 
-        // ── Signal state changes ──────────────────────────────────────────────
 
         void MarkRead(int64_t signalId);
         void MarkDismissed(int64_t signalId);
@@ -60,7 +57,6 @@ namespace stnks
         void DismissAll();
         void Clear();
 
-        // ── Configuration ─────────────────────────────────────────────────────
 
         // Minimum severity to auto-create signals from graph events
         SignalSeverity minAutoSignalSeverity = SignalSeverity::Warning;

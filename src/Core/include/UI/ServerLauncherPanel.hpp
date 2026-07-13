@@ -35,7 +35,7 @@ namespace stnks
             char apiKey[256]    = "";
             char apiSecret[256] = "";
             char accountId[128] = "";
-            // OAuth2 (GBM)
+            // OAuth2
             char clientId[128]     = "";
             char clientSecret[256] = "";
             char refreshToken[256] = "";
@@ -51,8 +51,8 @@ namespace stnks
             char dbName[128]    = "strategies.db";
             char logPath[256]   = "app/stnks-server.log";
 
-            // Brokers (index matches BrokerSource: 1=Binance, 2=GBM, 3=MetaTrader)
-            BrokerEntry brokers[3] = {};
+            // Brokers (1=Binance, 2=MetaTrader)
+            BrokerEntry brokers[2] = {};
 
             // AI / News (read from env on init)
             char gnewsKey[128]  = "";

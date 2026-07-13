@@ -12,6 +12,9 @@ namespace stnks
         explicit GraphEventsPanel(UIContext& ctx) : ctx_(ctx) {}
         void Draw(bool* open);
 
+        // Draw only the content (no Begin/End wrapper) — for embedding in tabbed panels
+        void DrawContent();
+
     private:
         UIContext& ctx_;
 

@@ -40,47 +40,24 @@ namespace stnks
         void DrawIndicatorCombo();
         void ResetView();
 
-        // When true, Draw() skips the header row (symbol, price, Reset, Graphs, Detach).
-        // Used by DetachedChart which provides its own toolbar.
         bool suppressHeader = false;
 
-        // Update strategies displayed on the chart (called from UI each frame)
         void SetStrategies(const std::vector<Strategy>& strategies);
-
-        // Get the strategy layer (may be null if not added yet)
         StrategyLayer* GetStrategyLayer() { return strategyLayer_; }
-
-        // Get the currently focused (hovered) candle index, or -1 if none
         int GetFocusedCandle() const { return viewport_.focusedCandle; }
-
-        // Get the total number of candles loaded
         int GetCandleCount() const { return (int)data_.candles.size(); }
-
-        // Scroll so that the given candle index is centered in view
         void ScrollToCandle(int candleIdx);
-
-        // Focus the Y axis on a price range (with margin), locks Y so AutoScale doesn't override
         void FocusOnPriceRange(float priceLo, float priceHi);
-
-        // Set event markers to draw on chart (dots at candle positions)
         void SetEventMarkers(const std::vector<GraphEvent>& events);
 
-        // Callback fired when user clicks "tear out" on a sub-panel indicator.
-        // Args: (indicatorName, symbol, quoteData)
+        std::function<void(const std::string& symbol, int candleIdx)> onEventMarkerClicked;
         std::function<void(const std::string& indicatorName)> onIndicatorTearOut;
-
-        // Callback fired when user clicks "Duplicate chart" button.
         std::function<void()> onDuplicateChart;
 
-        // Get current quote data (for DetachedChart creation)
         const StockQuote& GetData() const { return data_; }
-
-        // Shared crosshair: set a pointer to a global SharedCrosshair struct.
-        // All charts pointing to the same instance will sync their cursor.
         void SetSharedCrosshair(SharedCrosshair* shared) { sharedCrosshair_ = shared; }
 
-        // Layer tree: root nodes are separate panels, children are overlaid (merged).
-        // First visible root (non-Strategy) = main chart, rest = sub-panels.
+        // Root nodes are separate panels, children are overlaid (merged).
         struct LayerNode
         {
             int              layerIdx = -1;   // Index into layers_
@@ -105,17 +82,16 @@ namespace stnks
         StockQuote                                data_;
         ChartViewport                             viewport_;
         std::vector<std::unique_ptr<ChartLayer>>  layers_;
-        StrategyLayer* strategyLayer_ = nullptr;  // Cached pointer into layers_
+        StrategyLayer* strategyLayer_ = nullptr;
 
-        // Layout regions (computed each frame, used for crosshair sync)
         struct PanelRegion
         {
             ImVec2 origin;
             ImVec2 size;
-            ChartLayer* layer = nullptr;  // nullptr = main chart
-            float valMin = 0.f;           // Y-axis value range for this panel
+            ChartLayer* layer = nullptr;
+            float valMin = 0.f;
             float valMax = 0.f;
-            bool  hasRange = false;       // True if valMin/valMax are valid
+            bool  hasRange = false;
         };
         std::vector<PanelRegion> panelRegions_;
         float totalChartTop_    = 0.f;
@@ -150,30 +126,22 @@ namespace stnks
         static constexpr ImU32 kCrosshairColor = IM_COL32(90, 110, 140, 160);
         static constexpr ImU32 kBgColor        = IM_COL32(14, 16, 22, 255);
 
-        // Event markers
         std::vector<GraphEvent> eventMarkers_;
-        int highlightCandleIdx_ = -1;  // Briefly highlight a specific candle (from event click)
-        float highlightTimer_   = 0.f; // Fade-out timer for highlight
+        int highlightCandleIdx_ = -1;
+        float highlightTimer_   = 0.f;
 
-        // Shared crosshair (optional, nullptr = local-only)
         SharedCrosshair* sharedCrosshair_ = nullptr;
 
-        // Layer tree: root nodes = panels, children = overlaid on parent panel.
         std::vector<LayerNode> layerTree_;
-        bool layerTreeDirty_ = true;  // Rebuild tree on next draw
+        bool layerTreeDirty_ = true;
 
-        // Original heights (saved once, before any reorder)
         struct LayerOriginal { std::string name; float height; };
         std::vector<LayerOriginal> originalHeights_;
         bool heightsSaved_ = false;
 
-        // Helper: find which root a layer belongs to (-1 if root itself or not found)
         int FindParentRoot(int layerIdx) const;
-        // Helper: is this layer index a root node?
         bool IsRootLayer(int layerIdx) const;
-        // Helper: remove a layer from wherever it is in the tree and return it as standalone
         void DetachFromTree(int layerIdx);
-        // Helper: build default tree from layers_ (one root per layer)
         void RebuildDefaultTree();
     };
 

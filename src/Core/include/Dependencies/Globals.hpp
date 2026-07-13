@@ -47,7 +47,6 @@ namespace stnks
             }
         }
 
-        // ── Working folder ─────────────────────────────────────────────────
         // Always normalizes to end with '/' so callers can just concatenate.
         void SetWorkingFolder(const std::string& path)
         {
@@ -103,7 +102,6 @@ namespace stnks
             ar(cereal::make_nvp(gk::JSON_ROOT, groups_));
         }
 
-        // ── Key-value access ───────────────────────────────────────────────
         void Set(const std::string& prefix, std::string key, std::string value)
         {
             if (groups_.find(prefix) == groups_.end())

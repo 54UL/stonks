@@ -32,7 +32,6 @@ namespace stnks
         // Optionally register actions on the embedded server
         StrategyServer& GetServer() { return *server_; }
 
-        // ── IStrategyService ─────────────────────────────────────────────────
 
         int64_t               InsertStrategy(const Strategy& s) override;
         bool                  UpdateStrategy(const Strategy& s) override;

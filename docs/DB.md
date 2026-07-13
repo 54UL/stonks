@@ -1,89 +1,137 @@
-Current DB Layer Analysis
+# Database Layer
 
-What you have is already quite good:
+## Architecture
 
-1. StrategySchema.hpp — kDbFields[] descriptor array is basically a compile-time schema definition. SQL queries (INSERT, UPDATE, SELECT, CREATE
-   TABLE) are auto-generated from it.
-2. MigrationRunner — proper versioned migrations with transactions, rollback, seed support.
-3. StrategyStore — clean CRUD with prepared statements, WAL mode, busy timeout.
-4. static_assert safety — catches mismatches between kDbFields count and bind/read functions.
+```
+Database (connection + migrations)
+    |
+    +-- MigrationRunner (versioned .sql migrations)
+    |
+    +-- DbStore<T, Schema> (template CRUD for any struct)
+    |
+    +-- StrategyStore (domain facade wrapping DbStore<Strategy>)
+```
 
-Pain points for scaling to multiple tables:
+## DbStore — Template ORM
 
-1. BindStrategy / ReadRow are manual — 20 hand-written sqlite3_bind_* / sqlite3_column_* lines per table. Every new table means another 2 functions
-   with the same boilerplate.
-2. kDbFields[] and bind/read are separate — you can add a field to kDbFields but bind the wrong type or wrong member. The static_assert catches count
-   mismatches but not order/type bugs.
-3. Store classes are monolithic — each new table needs a new XxxStore class with the same prepare/step/finalize boilerplate.
-4. No type-safe queries — custom WHERE clauses are raw SQL strings.
+`DbStore<T, SchemaT>` provides schema-driven CRUD for any struct `T`. Define the mapping once via `MakeSchema()` and member pointers — INSERT, UPDATE, DELETE, SELECT, CREATE TABLE, bind, and read are all generated automatically.
 
-Options for Scaling
+### Defining a Schema
 
-Option A: sqlite_orm (header-only library)
+```cpp
+#include <Db/DbStore.hpp>
 
-auto storage = make_storage("db.sqlite",
-make_table("strategies",
-make_column("id", &Strategy::id, primary_key().autoincrement()),
-make_column("symbol", &Strategy::symbol),
-make_column("entry_price", &Strategy::entryPrice),
-// ...
-),
-make_table("trades", ...),
-make_table("portfolio_snapshots", ...)
+struct MyRecord {
+    int64_t     id = 0;
+    std::string name;
+    float       value = 0.f;
+    bool        active = true;
+};
+
+inline const auto kMySchema = db::MakeSchema<MyRecord>(
+    "my_table", &MyRecord::id,
+    db::Col("name",   &MyRecord::name,   "TEXT",    "NOT NULL"),
+    db::Col("value",  &MyRecord::value,  "REAL",    "DEFAULT 0"),
+    db::Col("active", &MyRecord::active, "INTEGER", "DEFAULT 1")
 );
-storage.sync_schema();  // auto-migration
-auto active = storage.get_all<Strategy>(where(c(&Strategy::status) == 0 and c(&Strategy::enabled) == true));
+```
 
-Pros: Full type-safe queries, auto schema sync, zero boilerplate bind/read, widely used.
-Cons: Heavy header (~30k lines), slow compile times, template error messages are brutal, no control over migration SQL, sync_schema() is not
-production-grade migration (can't rename columns, migrate data). Conflicts with your existing MigrationRunner which is better for production.
+### CRUD Operations
 
-Option B: Extend your existing pattern with C++ templates (recommended)
+```cpp
+db::Database database("myapp.db");
+db::DbStore store(database.Handle(), kMySchema);
+store.CreateTable();
 
-Your kDbFields[] + bind/read pattern is 80% of an ORM already. The missing piece is automatic bind/read via compile-time reflection. In C++17 you can
-get close with a field-binding tuple:
+// Insert
+MyRecord r{.name = "test", .value = 3.14f};
+int64_t id = store.Insert(r);
 
-// Define schema + binding in ONE place per table
-inline constexpr auto kStrategySchema = DbSchema("strategies",
-Field("symbol",      &Strategy::symbol,     "TEXT NOT NULL"),
-Field("direction",   &Strategy::direction,   "INTEGER NOT NULL DEFAULT 0"),
-Field("entry_price", &Strategy::entryPrice,  "REAL NOT NULL"),
-// ... one line per field, member pointer IS the binding
-);
+// Read
+auto all = store.GetAll("ORDER BY name ASC");
+auto one = store.GetById(id);
+auto filtered = store.Where("active=? AND value>?", true, 1.0f);
+auto first = store.FindOne("name=?", "test");
 
-// Generic Store<T> does all CRUD — no manual bind/read
-DbStore<Strategy> store(db, kStrategySchema);
-store.Insert(strategy);
-auto all = store.GetAll("ORDER BY priority ASC");
-auto active = store.Where("status=0 AND enabled=1");
+// Aggregate
+int64_t count = store.Count("active=?", true);
+bool exists = store.Exists("name=?", "test");
 
-What this eliminates:
-- Manual BindStrategy() / ReadRow() functions (derived from member pointers)
-- Manual BuildColumnList() / BuildPlaceholders() / BuildSetClause() (generic)
-- Separate XxxStore classes per table (one DbStore<T> template)
-- The static_assert hack (binding IS the schema, can't mismatch)
+// Update
+r.value = 2.71f;
+store.Update(r);
 
-What you keep:
-- Your MigrationRunner (far superior to auto-sync for production)
-- Raw SQL escape hatch for complex queries
-- Full control, no heavy dependencies
+// Delete
+store.Delete(id);
 
-Option C: sqlpp11 (type-safe SQL DSL)
+// Raw SQL
+store.Exec("UPDATE my_table SET active=0 WHERE value<?", 1.0f);
+```
 
-Generates C++ types from SQL schema. Very powerful but adds a code generation step and is complex to set up.
+### Named Queries
 
-  ---
-Recommendation: Option B
+Load `.sql` files from `db/queries/{table}/` for complex operations:
 
-You're close already. I'd build a lightweight DbStore<T> template that:
+```cpp
+auto queries = database.LoadQueries("my_table");
+store.SetQueries(queries);
 
-1. Uses std::tuple of Field<T, MemberType> descriptors (column name + member pointer + SQL type)
-2. Auto-generates bind via sqlite3_bind_* dispatch on member pointer type
-3. Auto-generates read via sqlite3_column_* dispatch
-4. Provides generic Insert, Update, Delete, GetById, GetAll, Where
-5. Generates CREATE TABLE DDL for bootstrap (like your current CreateTable())
+// db/queries/my_table/deactivate_old.sql:
+//   UPDATE my_table SET active=0 WHERE value < ?
+store.ExecQuery("deactivate_old", 1.0f);
 
-Your MigrationRunner stays as-is for real schema evolution. The DbStore<T> just eliminates the per-table boilerplate.
+// SELECT queries
+auto results = store.RunQuery("find_by_range", minVal, maxVal);
+```
 
-Want me to build this? It would be ~200 lines in a single header (Db/DbStore.hpp), then the Strategy schema + store shrinks from ~230 lines across 2
-files to ~30 lines of schema definition, and every new table is just another schema definition + DbStore<NewType>.
+### Supported Types
+
+| C++ Type | SQLite Type | Bind | Read |
+|----------|------------|------|------|
+| `std::string` | TEXT | `sqlite3_bind_text` | `sqlite3_column_text` |
+| `float` | REAL | `sqlite3_bind_double` | `sqlite3_column_double` |
+| `double` | REAL | `sqlite3_bind_double` | `sqlite3_column_double` |
+| `int` | INTEGER | `sqlite3_bind_int` | `sqlite3_column_int` |
+| `int64_t` | INTEGER | `sqlite3_bind_int64` | `sqlite3_column_int64` |
+| `bool` | INTEGER | `sqlite3_bind_int` (0/1) | `sqlite3_column_int` (!=0) |
+| Any `enum` | INTEGER | `sqlite3_bind_int` (cast) | `sqlite3_column_int` (cast) |
+
+### Adding a New Table
+
+1. Define the struct
+2. Define the schema with `MakeSchema()` + `Col()` entries
+3. Create a migration: `db/migrations/NNN_description.sql`
+4. (Optional) Create a domain facade class wrapping `DbStore<YourType>`
+5. (Optional) Add named queries in `db/queries/your_table/`
+
+## Migrations
+
+Versioned SQL files in `db/migrations/`, applied in order by `MigrationRunner` at startup.
+
+```
+db/migrations/
+  001_create_strategies.sql
+  002_add_strategy_type.sql
+  003_add_exit_tracking.sql
+  ...
+```
+
+Tracking table `schema_migrations` records which versions have been applied.
+
+The `seed_db.sh` script can apply migrations and seed data from the CLI:
+```bash
+./dev_env/seed_db.sh                     # default db
+./dev_env/seed_db.sh path/to/my.db       # custom path
+./dev_env/seed_db.sh my.db --no-seed     # migrations only
+```
+
+## Database Connection
+
+`Database` handles connection lifecycle with WAL mode and busy timeout:
+
+```cpp
+db::Database database("myapp.db");
+sqlite3* handle = database.Handle();
+```
+
+Path resolution: uses `ASSETS_STNKS` env var as root, falls back to current directory.

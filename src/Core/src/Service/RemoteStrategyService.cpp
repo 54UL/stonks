@@ -32,7 +32,6 @@ namespace stnks
         return s;
     }
 
-    // ── Strategy CRUD ────────────────────────────────────────────────────────────
 
     int64_t RemoteStrategyService::InsertStrategy(const Strategy& s)
     {
@@ -90,7 +89,6 @@ namespace stnks
         return ParseStrategies(resp.body);
     }
 
-    // ── Market data ──────────────────────────────────────────────────────────────
 
     StockQuote RemoteStrategyService::FetchQuote(const std::string& symbol,
                                                   const std::string& interval,
@@ -115,7 +113,6 @@ namespace stnks
         return ParseSymbolMatches(resp.body);
     }
 
-    // ── Status ───────────────────────────────────────────────────────────────────
 
     bool RemoteStrategyService::IsConnected() const
     {
@@ -162,7 +159,6 @@ namespace stnks
         });
     }
 
-    // ── JSON helpers ─────────────────────────────────────────────────────────────
 
     std::string RemoteStrategyService::StrategyToJson(const Strategy& s)
     {
@@ -296,7 +292,6 @@ namespace stnks
         return result;
     }
 
-    // ── ENet live price ────────────────────────────────────────────────────────
 
     float RemoteStrategyService::GetLivePrice(const std::string& symbol) const
     {

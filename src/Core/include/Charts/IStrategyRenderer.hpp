@@ -51,75 +51,111 @@ namespace stnks
             StrategyInteraction result;
             if (!strategy.IsActive()) return result;
 
+            // Only interact when this chart's child window is hovered
+            bool windowHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+
             float yEntry = vp.PriceToY(strategy.entryPrice);
-            float right  = vp.chartOrigin.x + vp.chartSize.x;
 
-            // Mini-bar dimensions
-            float barH   = 18.f;
-            float barW   = 0.f;
+            // ── Layout ──
+            float barH   = 22.f;
             float barY   = yEntry - barH * 0.5f + yOffset;
+            barY = std::clamp(barY, vp.chartOrigin.y + 2.f, vp.chartOrigin.y + vp.chartSize.y - barH - 2.f);
 
-            // Clamp to chart area
-            barY = std::max(barY, vp.chartOrigin.y + 2.f);
-            barY = std::min(barY, vp.chartOrigin.y + vp.chartSize.y - barH - 2.f);
+            bool isLong = strategy.direction == StrategyDirection::Long;
 
-            // Build label
-            char label[64];
+            // ── Build label parts ──
+            const char* dirArrow = isLong ? "\xe2\x96\xb2" : "\xe2\x96\xbc"; // Unicode triangles
+            char priceBuf[32];
+            FmtPrice(priceBuf, sizeof(priceBuf), strategy.entryPrice, strategy.symbol);
+
             const char* typeTag = strategy.IsTPSL() ? "TP/SL" : (strategy.IsPosition() ? "POS" : "AI");
-            const char* dirTag  = strategy.direction == StrategyDirection::Long ? "L" : "S";
-            { char pb[32]; FmtPrice(pb, sizeof(pb), strategy.entryPrice, strategy.symbol);
-            snprintf(label, sizeof(label), "%s %s %s", typeTag, dirTag, pb); }
+
+            char label[80];
+            snprintf(label, sizeof(label), " %s %s  %s ", dirArrow, typeTag, priceBuf);
 
             ImVec2 textSz = ImGui::CalcTextSize(label);
-            float xBtnW = 16.f; // X button width
-            float pad    = 4.f;
-            barW = textSz.x + xBtnW + pad * 3.f;
-
+            float closeBtnW = 20.f;
+            float pad = 6.f;
+            float barW = textSz.x + closeBtnW + pad * 2.f;
             float barX = vp.chartOrigin.x + 4.f;
 
             ImVec2 barMin(barX, barY);
             ImVec2 barMax(barX + barW, barY + barH);
 
-            // Colors based on direction
-            bool isLong = strategy.direction == StrategyDirection::Long;
-            ImU32 barBg    = IM_COL32(22, 24, 32, 220);
-            ImU32 barBord  = isLong ? IM_COL32(38, 166, 91, 140) : IM_COL32(214, 48, 49, 140);
-            ImU32 textCol  = isLong ? IM_COL32(80, 200, 120, 255) : IM_COL32(230, 90, 90, 255);
+            // ── Colors ──
+            ImU32 dirColor     = isLong ? IM_COL32(38, 180, 100, 255) : IM_COL32(230, 75, 75, 255);
+            ImU32 dirColorDim  = isLong ? IM_COL32(38, 180, 100, 140) : IM_COL32(230, 75, 75, 140);
 
-            bool barHovered = ImGui::IsMouseHoveringRect(barMin, barMax);
+            bool barHovered = windowHovered && ImGui::IsMouseHoveringRect(barMin, barMax);
+
+            // Background: subtle gradient feel with left accent stripe
+            ImU32 barBg = barHovered ? IM_COL32(30, 34, 48, 245) : IM_COL32(18, 20, 28, 230);
+            ImU32 barBord = barHovered ? dirColor : dirColorDim;
+
+            // ── Draw bar ──
+            drawList->AddRectFilled(barMin, barMax, barBg, 4.f);
+
+            // Left accent stripe (direction color)
+            float stripeW = 3.f;
+            drawList->AddRectFilled(
+                ImVec2(barX, barY + 1.f),
+                ImVec2(barX + stripeW, barY + barH - 1.f),
+                dirColor, 2.f);
+
+            // Border (only on hover — cleaner look)
             if (barHovered)
+                drawList->AddRect(barMin, barMax, barBord, 4.f, 0, 1.2f);
+
+            // ── Label text ──
+            float textY = barY + (barH - textSz.y) * 0.5f;
+            ImU32 textCol = barHovered ? IM_COL32(240, 240, 250, 255) : IM_COL32(180, 185, 200, 220);
+
+            // Direction arrow gets its own color
+            ImVec2 arrowSz = ImGui::CalcTextSize(dirArrow);
+            float arrowX = barX + pad + stripeW;
+            drawList->AddText(ImVec2(arrowX, textY), dirColor, dirArrow);
+
+            // Rest of label after arrow
+            char restLabel[64];
+            snprintf(restLabel, sizeof(restLabel), " %s  %s ", typeTag, priceBuf);
+            drawList->AddText(ImVec2(arrowX + arrowSz.x, textY), textCol, restLabel);
+
+            // ── Close button (circle with X) ──
+            float closeCx = barX + barW - closeBtnW * 0.5f - pad * 0.5f;
+            float closeCy = barY + barH * 0.5f;
+            float closeR  = 7.f;
+
+            bool closeHovered = windowHovered && ImGui::IsMouseHoveringRect(
+                ImVec2(closeCx - closeR, closeCy - closeR),
+                ImVec2(closeCx + closeR, closeCy + closeR));
+
+            if (closeHovered || barHovered)
             {
-                barBg   = IM_COL32(32, 36, 48, 240);
-                barBord = isLong ? IM_COL32(50, 200, 110, 220) : IM_COL32(240, 70, 70, 220);
+                ImU32 closeBg = closeHovered ? IM_COL32(200, 50, 50, 200) : IM_COL32(80, 40, 40, 120);
+                drawList->AddCircleFilled(ImVec2(closeCx, closeCy), closeR, closeBg);
+            }
+            // X cross
+            float cr = 3.f;
+            ImU32 xCol = closeHovered ? IM_COL32(255, 255, 255, 255) : IM_COL32(160, 160, 170, barHovered ? 200 : 100);
+            drawList->AddLine(ImVec2(closeCx - cr, closeCy - cr), ImVec2(closeCx + cr, closeCy + cr), xCol, 1.5f);
+            drawList->AddLine(ImVec2(closeCx + cr, closeCy - cr), ImVec2(closeCx - cr, closeCy + cr), xCol, 1.5f);
+
+            // ── Dashed connection line from bar to entry price level ──
+            float lineStartX = barX + barW + 2.f;
+            float lineEndX   = vp.chartOrigin.x + vp.chartSize.x;
+            float lineY      = yEntry;
+            ImU32 lineCol = barHovered ? dirColor : IM_COL32(
+                (dirColor >> 0) & 0xFF, (dirColor >> 8) & 0xFF, (dirColor >> 16) & 0xFF, 50);
+            float dashX = lineStartX;
+            while (dashX < lineEndX)
+            {
+                float endX = std::min(dashX + 5.f, lineEndX);
+                drawList->AddLine(ImVec2(dashX, lineY), ImVec2(endX, lineY), lineCol, 0.8f);
+                dashX += 9.f;
             }
 
-            // Draw bar
-            drawList->AddRectFilled(barMin, barMax, barBg, 3.f);
-            drawList->AddRect(barMin, barMax, barBord, 3.f, 0, 1.f);
-
-            // Label text
-            float textY = barY + (barH - textSz.y) * 0.5f;
-            drawList->AddText(ImVec2(barX + pad, textY), textCol, label);
-
-            // X button (delete/cancel)
-            float xBtnX = barX + barW - xBtnW - pad * 0.5f;
-            ImVec2 xMin(xBtnX, barY + 2.f);
-            ImVec2 xMax(xBtnX + xBtnW, barY + barH - 2.f);
-            bool xHovered = ImGui::IsMouseHoveringRect(xMin, xMax);
-
-            ImU32 xBg  = xHovered ? IM_COL32(180, 40, 40, 200) : IM_COL32(80, 30, 30, 160);
-            ImU32 xCol = xHovered ? IM_COL32(255, 255, 255, 255) : IM_COL32(200, 200, 200, 180);
-            drawList->AddRectFilled(xMin, xMax, xBg, 2.f);
-
-            // Draw X cross
-            float cx = xBtnX + xBtnW * 0.5f;
-            float cy = barY + barH * 0.5f;
-            float cr = 3.5f;
-            drawList->AddLine(ImVec2(cx - cr, cy - cr), ImVec2(cx + cr, cy + cr), xCol, 1.5f);
-            drawList->AddLine(ImVec2(cx + cr, cy - cr), ImVec2(cx - cr, cy + cr), xCol, 1.5f);
-
-            // Handle clicks
-            if (xHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            // ── Handle clicks ──
+            if (closeHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
                 result.deleted = true;
             else if (barHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
                 result.selected = true;
@@ -127,17 +163,24 @@ namespace stnks
             if (barHovered)
                 ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
 
-            // Tooltip
-            if (barHovered && !xHovered)
+            // ── Tooltip ──
+            if (barHovered && !closeHovered)
             {
                 ImGui::BeginTooltip();
-                ImGui::Text("%s #%lld", StrategyTypeToString(strategy.type), (long long)strategy.id);
+                ImGui::TextColored(isLong ? ImVec4(0.15f,0.7f,0.4f,1.f) : ImVec4(0.9f,0.3f,0.3f,1.f),
+                    "%s %s", DirectionToString(strategy.direction), StrategyTypeToString(strategy.type));
+                ImGui::SameLine();
+                ImGui::TextDisabled("#%lld", (long long)strategy.id);
                 { char pb[32]; FmtPrice(pb, sizeof(pb), strategy.entryPrice, strategy.symbol);
-                ImGui::Text("%s @ %s", DirectionToString(strategy.direction), pb); }
-                if (strategy.takeProfit > 0.f) { char pb[32]; ImGui::Text("TP: %s", FmtPrice(pb, sizeof(pb), strategy.takeProfit, strategy.symbol)); }
-                if (strategy.stopLoss > 0.f)   { char pb[32]; ImGui::Text("SL: %s", FmtPrice(pb, sizeof(pb), strategy.stopLoss, strategy.symbol)); }
+                ImGui::Text("Entry: %s", pb); }
+                if (strategy.takeProfit > 0.f) { char pb[32]; ImGui::Text("TP: %s (%+.1f%%)", FmtPrice(pb, sizeof(pb), strategy.takeProfit, strategy.symbol), strategy.TPPercent()); }
+                if (strategy.stopLoss > 0.f)   { char pb[32]; ImGui::Text("SL: %s (%+.1f%%)", FmtPrice(pb, sizeof(pb), strategy.stopLoss, strategy.symbol), strategy.SLPercent()); }
                 if (strategy.quantity > 0.f)    ImGui::Text("Qty: %.0f", strategy.quantity);
+                if (strategy.takeProfit > 0.f && strategy.stopLoss > 0.f)
+                    ImGui::TextColored(ImVec4(0.7f,0.7f,0.8f,1.f), "R:R %.1f", strategy.RiskReward());
                 if (!strategy.notes.empty())    ImGui::TextDisabled("%s", strategy.notes.c_str());
+                ImGui::Separator();
+                ImGui::TextDisabled("Click to edit  |  X to close");
                 ImGui::EndTooltip();
             }
 

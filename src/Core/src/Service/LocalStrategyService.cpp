@@ -41,7 +41,6 @@ namespace stnks
         return server_ && server_->IsRunning();
     }
 
-    // ── Strategy CRUD (direct to SQLite) ─────────────────────────────────────────
 
     int64_t LocalStrategyService::InsertStrategy(const Strategy& s)
     {
@@ -90,7 +89,6 @@ namespace stnks
         return store_->GetBySymbol(symbol);
     }
 
-    // ── Market data (direct) ─────────────────────────────────────────────────────
 
     StockQuote LocalStrategyService::FetchQuote(const std::string& symbol,
                                                  const std::string& interval,

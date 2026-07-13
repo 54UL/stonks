@@ -8,7 +8,6 @@
 
 namespace stnks
 {
-    // ── Signal Action Type ────────────────────────────────────────────────────
     // What the user can DO when they click/accept a signal
 
     enum class SignalAction : int
@@ -37,7 +36,6 @@ namespace stnks
         return "?";
     }
 
-    // ── Signal Origin ─────────────────────────────────────────────────────────
     // Where the signal was generated from
 
     enum class SignalOrigin : int
@@ -64,7 +62,6 @@ namespace stnks
         return "?";
     }
 
-    // ── Signal Resource ───────────────────────────────────────────────────────
     // A single piece of evidence/context that supports the signal.
     // Rendered as a tree node in the collapsible detail view.
 
@@ -96,7 +93,6 @@ namespace stnks
         EventSource  eventSource = EventSource::Strategy;
     };
 
-    // ── Signal Severity ───────────────────────────────────────────────────────
 
     enum class SignalSeverity : int
     {
@@ -116,7 +112,6 @@ namespace stnks
         return "?";
     }
 
-    // ── Market Signal ─────────────────────────────────────────────────────────
     // The unified signal struct that combines all sources into one actionable item.
 
     struct MarketSignal
@@ -150,7 +145,6 @@ namespace stnks
         bool            accepted   = false;  // User clicked "accept" and created strategy/order
         bool            read       = false;  // User has seen this signal (expanded it)
 
-        // Helpers
         bool IsActionable() const { return action != SignalAction::None && !dismissed && !accepted; }
         bool IsBuyish() const { return action == SignalAction::Buy || action == SignalAction::CreateTPSL; }
         bool IsSellish() const { return action == SignalAction::Sell || action == SignalAction::ClosePos; }

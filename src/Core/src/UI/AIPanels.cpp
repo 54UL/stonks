@@ -9,7 +9,6 @@
 
 namespace stnks
 {
-    // ── Recommendations ─────────────────────────────────────────────────────
 
     void RecommendationsPanel::Draw(bool* open)
     {
@@ -67,7 +66,6 @@ namespace stnks
         ImGui::End();
     }
 
-    // ── Market Warnings ─────────────────────────────────────────────────────
 
     void MarketWarningsPanel::Draw(bool* open)
     {
@@ -83,6 +81,12 @@ namespace stnks
         ImGui::Begin("Market Warnings", open);
         if (hasAlerts) ImGui::PopStyleColor(2);
 
+        DrawContent();
+        ImGui::End();
+    }
+
+    void MarketWarningsPanel::DrawContent()
+    {
         ImGui::TextDisabled("(%zu warnings)", ctx_.warnings->size());
         ImGui::Separator();
 
@@ -120,10 +124,8 @@ namespace stnks
                 ImGui::PopID();
             }
         }
-        ImGui::End();
     }
 
-    // ── AI Operations ───────────────────────────────────────────────────────
 
     void AIOperationsPanel::Draw(bool* open)
     {

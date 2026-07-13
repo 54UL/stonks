@@ -5,6 +5,8 @@
 #include <Service/RemoteStrategyService.hpp>
 #include <Dependencies/Globals.hpp>
 #include <GlobalKeys.hpp>
+#include <Broker/BinanceBrokerConnector.hpp>
+#include <Broker/MetaTraderConnector.hpp>
 #include <portable-file-dialogs.h>
 #include <spdlog/spdlog.h>
 #include <algorithm>
@@ -20,12 +22,9 @@ namespace stnks
     UI::UI(const std::shared_ptr<Engine>& engine) : engine_(engine) {}
     UI::~UI()
     {
-        // Stop RT polling before MarketService/HttpClient are destroyed
         if (marketService_)
             marketService_->StopAllPolling();
     }
-
-    // ── BuildContext ────────────────────────────────────────────────────────────
 
     void UI::BuildContext()
     {
@@ -82,9 +81,18 @@ namespace stnks
             return ExecuteOrder(sym, b, s, q, p);
         };
         ctx_.connectToServer = [this](const std::string& url) { ConnectToServer(url); };
+        ctx_.wireBroker      = [this](const std::string& name) { WireBroker(name); };
+        ctx_.saveEnv         = [this]() {
+            if (engine_->globals_)
+            {
+                std::string envPath = engine_->globals_->GetWorkingFolder() + ".env";
+                if (envOverrides_.SaveToFile(envPath))
+                    spdlog::info("[UI] Saved .env to {}", envPath);
+                else
+                    spdlog::error("[UI] Failed to save .env to {}", envPath);
+            }
+        };
     }
-
-    // ── Init ────────────────────────────────────────────────────────────────────
 
     void UI::Init()
     {
@@ -93,7 +101,6 @@ namespace stnks
         httpClient_    = std::make_unique<HttpClient>(engine_->threadRegistry_);
         marketService_ = std::make_unique<MarketService>(*httpClient_, engine_->threadRegistry_);
 
-        // Strategy service: check STNKS_SERVER_URL env for remote mode, else monolith
         const char* serverUrl = std::getenv("STNKS_SERVER_URL");
 
         if (serverUrl && serverUrl[0] != '\0')
@@ -141,34 +148,38 @@ namespace stnks
         regEnv("BINANCE_API_KEY",     true);
         regEnv("BINANCE_API_SECRET",  true);
         regEnv("BINANCE_SANDBOX",     false);
-        regEnv("GBM_CLIENT_ID",       true);
-        regEnv("GBM_CLIENT_SECRET",   true);
-        regEnv("GBM_REFRESH_TOKEN",   true);
-        regEnv("GBM_ACCOUNT_ID",      false);
-        regEnv("GBM_SANDBOX",         false);
         regEnv("MT5_API_KEY",         true);
         regEnv("MT5_ACCOUNT_ID",      false);
         regEnv("STNKS_SERVER_URL",    false);
         regEnv("ASSETS_STNKS",        false);
 
+        // Load persisted .env overrides (from previous sessions)
+        if (engine_->globals_)
+        {
+            std::string envPath = engine_->globals_->GetWorkingFolder() + ".env";
+            if (envOverrides_.LoadFromFile(envPath))
+                spdlog::info("[UI] Loaded .env overrides from {}", envPath);
+        }
+
         // Default system toggles based on key availability
         systemToggles_.ai       = envOverrides_.IsSet("CLAUDE_API_KEY");
         systemToggles_.news     = envOverrides_.IsSet("GNEWS_API_KEY");
         systemToggles_.binance  = envOverrides_.IsSet("BINANCE_API_KEY");
-        systemToggles_.gbm      = envOverrides_.IsSet("GBM_CLIENT_ID");
         systemToggles_.metaTrader = envOverrides_.IsSet("MT5_API_KEY");
+
+        // Wire broker connectors into MarketService based on available credentials
+        InitBrokerSources();
 
         // Build shared context and create all panels
         BuildContext();
         strategyTable_  = std::make_unique<StrategyTablePanel>(ctx_);
         portfolioPanel_ = std::make_unique<PortfolioPanel>(ctx_);
-        signalsPanel_   = std::make_unique<MarketSignalsPanel>(ctx_);
         recsPanel_      = std::make_unique<RecommendationsPanel>(ctx_);
-        warningsPanel_  = std::make_unique<MarketWarningsPanel>(ctx_);
         aiOpsPanel_     = std::make_unique<AIOperationsPanel>(ctx_);
-        graphEventsPanel_ = std::make_unique<GraphEventsPanel>(ctx_);
+        insightsPanel_  = std::make_unique<MarketInsightsPanel>(ctx_);
         dashboardPanel_ = std::make_unique<DashboardPanel>(ctx_);
         serverLauncherPanel_ = std::make_unique<ServerLauncherPanel>(ctx_);
+        positionsPanel_      = std::make_unique<PositionsPanel>(ctx_);
 
         // Activity bar: colored initials (IntelliJ style)
         activityPanels_ = {
@@ -178,10 +189,9 @@ namespace stnks
             {"W",  "Strategy Wizard",  &showStrategyWizard_,  ui::kABWizard},
             {"D",  "Dashboard",        &showDashboard_,       ui::kABDashboard},
             {"R",  "Recommendations",  &showRecommendations_, ui::kABRecs},
-            {"!",  "Market Warnings",  &showMarketWarnings_,  ui::kABWarnings},
             {"A",  "AI Operations",    &showAIOperations_,    ui::kABAIOps},
-            {"E",  "Graph Events",     &showGraphEvents_,     ui::kABEvents},
-            {"M",  "Market Signals",   &showMarketSignals_,   ui::kABSignals},
+            {"I",  "Market Insights",  &showMarketInsights_,  ui::kABEvents},
+            {"B",  "Broker Positions", &showPositions_,       ui::kABPositions},
             {"L",  "Server Launcher",  &showServerLauncher_,  ui::kABServer},
             {"T",  "Threads Debugger", &showThreadsDebugger_, ui::kABThreads},
         };
@@ -200,7 +210,6 @@ namespace stnks
 
     void UI::Update() {}
 
-    // ── Server Connection ─────────────────────────────────────────────────────
 
     void UI::ConnectToServer(const std::string& serverUrl)
     {
@@ -226,7 +235,94 @@ namespace stnks
         strategiesDirty_ = true;
     }
 
-    // ── Async Result Draining ──────────────────────────────────────────────────
+
+    void UI::InitBrokerSources()
+    {
+        // Wire all brokers that have credentials available.
+        // Each call reads current env overrides, so this works at init
+        // AND when credentials are updated at runtime via WireBroker().
+        WireBroker("Binance");
+        WireBroker("MetaTrader 5");
+    }
+
+    void UI::WireBroker(const std::string& brokerName)
+    {
+        // Remove existing connector for this broker (disconnect + cleanup)
+        marketService_->RemoveSource(brokerName);
+
+        auto getEnv = [this](const char* key) -> std::string {
+            return envOverrides_.Get(key);
+        };
+
+        if (brokerName == "Binance")
+        {
+            std::string apiKey    = getEnv("BINANCE_API_KEY");
+            std::string apiSecret = getEnv("BINANCE_API_SECRET");
+            if (apiKey.empty() || apiSecret.empty()) return;
+
+            BrokerConfig cfg;
+            cfg.name = "Binance";
+            cfg.credentials.authType  = BrokerAuthType::ApiKey;
+            cfg.credentials.apiKey    = apiKey;
+            cfg.credentials.apiSecret = apiSecret;
+
+            bool sandbox = (getEnv("BINANCE_SANDBOX") != "0");
+            cfg.credentials.sandbox = sandbox;
+            cfg.restBaseUrl = sandbox
+                ? "https://testnet.binance.vision"
+                : "https://api.binance.com";
+            cfg.wsUrl = sandbox
+                ? "wss://testnet.binance.vision/ws"
+                : "wss://stream.binance.com:9443/ws";
+
+            auto connector = std::make_unique<BinanceBrokerConnector>(*httpClient_);
+            connector->Initialize(cfg);
+            connector->Connect();
+
+            bool ok = (connector->GetConnectionState() == WsState::Connected);
+            if (ok)
+                PushToast("Binance connected", ui::kToastSuccess);
+            else
+                PushToast("Binance connection failed", ui::kToastError);
+
+            spdlog::info("[UI] Binance connector wired (sandbox={}, connected={})", sandbox, ok);
+            marketService_->AddSource(std::move(connector));
+            systemToggles_.binance = true;
+        }
+        else if (brokerName == "MetaTrader 5")
+        {
+            std::string apiKey = getEnv("MT5_API_KEY");
+            if (apiKey.empty()) return;
+
+            BrokerConfig cfg;
+            cfg.name = "MetaTrader 5";
+            cfg.credentials.authType  = BrokerAuthType::ApiKey;
+            cfg.credentials.apiKey    = apiKey;
+            cfg.credentials.accountId = getEnv("MT5_ACCOUNT_ID");
+            cfg.credentials.sandbox   = true;
+            cfg.restBaseUrl = "https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai";
+            cfg.wsUrl       = "wss://mt-client-api-v1.agiliumtrade.agiliumtrade.ai/ws";
+
+            auto connector = std::make_unique<MetaTraderConnector>(*httpClient_);
+            connector->Initialize(cfg);
+            connector->Connect();
+
+            bool ok = (connector->GetConnectionState() == WsState::Connected);
+            if (ok)
+                PushToast("MetaTrader connected", ui::kToastSuccess);
+            else
+                PushToast("MetaTrader connection failed", ui::kToastError);
+
+            spdlog::info("[UI] MetaTrader connector wired (connected={})", ok);
+            marketService_->AddSource(std::move(connector));
+            systemToggles_.metaTrader = true;
+        }
+        else
+        {
+            spdlog::warn("[UI] Unknown broker: {}", brokerName);
+        }
+    }
+
 
     void UI::DrainAsyncResults()
     {
@@ -448,7 +544,6 @@ namespace stnks
         });
     }
 
-    // ── Strategy Layer Wiring ──────────────────────────────────────────────────
 
     void UI::WireStrategyLayerCallbacks(StrategyLayer& stratLayer, const std::string& /*symbol*/)
     {
@@ -537,6 +632,12 @@ namespace stnks
     void UI::WireChartTearOutCallbacks(ChartPanelData& panel)
     {
         std::string sym = panel.symbol;
+
+        panel.chart.onEventMarkerClicked = [this](const std::string& /*symbol*/, int /*candleIdx*/) {
+            showMarketInsights_ = true;
+            insightsPanel_->FocusTab(InsightsTab::Events);
+        };
+
         panel.chart.onIndicatorTearOut = [this, sym](const std::string& indicatorName) {
             for (auto& p : charts_)
             {
@@ -566,7 +667,6 @@ namespace stnks
         };
     }
 
-    // ── Strategy Trigger Checking ──────────────────────────────────────────────
 
     void UI::CheckStrategyTriggers()
     {
@@ -650,7 +750,6 @@ namespace stnks
                     label, strat.symbol, price, strat.entryPrice);
     }
 
-    // ── Insight Refresh ────────────────────────────────────────────────────────
 
     void UI::RefreshInsights()
     {
@@ -679,7 +778,6 @@ namespace stnks
         spdlog::info("[UI] Refreshing insights for {} symbols", symbols.size());
     }
 
-    // ── TickUI ─────────────────────────────────────────────────────────────────
 
     void UI::TickUI()
     {
@@ -702,16 +800,15 @@ namespace stnks
 
         if (showDashboard_)       dashboardPanel_->Draw(&showDashboard_);
         if (showServerLauncher_)  serverLauncherPanel_->Draw(&showServerLauncher_);
+        if (showPositions_)       positionsPanel_->Draw(&showPositions_);
         if (showThreadsDebugger_) ShowThreadsDebugger();
         if (showStockCharts_)     ShowStockCharts();
         if (showStrategyWizard_)  ShowStrategyWizard();
         if (showStrategies_)      strategyTable_->DrawWindow(&showStrategies_);
         if (showPortfolio_)       portfolioPanel_->Draw(&showPortfolio_);
-        if (showMarketSignals_)   signalsPanel_->Draw(&showMarketSignals_);
+        if (showMarketInsights_)  insightsPanel_->Draw(&showMarketInsights_);
         if (showRecommendations_) recsPanel_->Draw(&showRecommendations_);
-        if (showMarketWarnings_)  warningsPanel_->Draw(&showMarketWarnings_);
         if (showAIOperations_)    aiOpsPanel_->Draw(&showAIOperations_);
-        if (showGraphEvents_)     graphEventsPanel_->Draw(&showGraphEvents_);
 
         RenderDetachedCharts();
 
@@ -897,7 +994,6 @@ namespace stnks
         TickUI();
     }
 
-    // ── Dock Space & Menu ──────────────────────────────────────────────────────
 
     void UI::DrawActivityBar(DockSide /*side*/)
     {
@@ -1017,13 +1113,11 @@ namespace stnks
             ImGui::DockBuilderDockWindow("Stock Charts",        dockCenterTop);
             ImGui::DockBuilderDockWindow("Strategies",          dockCenterBottom);
             ImGui::DockBuilderDockWindow("Portfolio",           dockCenterBottom);
-            ImGui::DockBuilderDockWindow("###GraphEvents",      dockCenterBottom);
-            ImGui::DockBuilderDockWindow("###MarketSignals",    dockCenterBottom);
+            ImGui::DockBuilderDockWindow("###MarketInsights",   dockCenterBottom);
 
             ImGui::DockBuilderDockWindow("###StrategyWizard",   dockRightTop);
             ImGui::DockBuilderDockWindow("Dashboard",           dockRightBottom);
             ImGui::DockBuilderDockWindow("Recommendations",     dockRightBottom);
-            ImGui::DockBuilderDockWindow("Market Warnings",     dockRightBottom);
             ImGui::DockBuilderDockWindow("AI Operations",       dockRightBottom);
             ImGui::DockBuilderDockWindow("Server Launcher",     dockRightBottom);
             ImGui::DockBuilderDockWindow("Threads Debugger",    dockRightBottom);
@@ -1055,12 +1149,10 @@ namespace stnks
             ImGui::MenuItem("Strategy Wizard",  nullptr, &showStrategyWizard_);
             ImGui::MenuItem("Strategies",       nullptr, &showStrategies_);
             ImGui::MenuItem("Portfolio",        nullptr, &showPortfolio_);
-            ImGui::MenuItem("Market Signals",   nullptr, &showMarketSignals_);
+            ImGui::MenuItem("Market Insights",  nullptr, &showMarketInsights_);
             ImGui::Separator();
             ImGui::MenuItem("Recommendations",  nullptr, &showRecommendations_);
-            ImGui::MenuItem("Market Warnings",  nullptr, &showMarketWarnings_);
             ImGui::MenuItem("AI Operations",    nullptr, &showAIOperations_);
-            ImGui::MenuItem("Graph Events",     nullptr, &showGraphEvents_);
             ImGui::MenuItem("Server Launcher",  nullptr, &showServerLauncher_);
             ImGui::Separator();
             if (ImGui::MenuItem("New Chart Window"))
@@ -1091,9 +1183,8 @@ namespace stnks
             {
                 dockLayoutBuilt_ = false;
                 showDashboard_ = showStockCharts_ = showStrategyWizard_ = true;
-                showStrategies_ = showPortfolio_ = showMarketSignals_ = true;
-                showRecommendations_ = showMarketWarnings_ = showAIOperations_ = true;
-                showGraphEvents_ = true;
+                showStrategies_ = showPortfolio_ = showMarketInsights_ = true;
+                showRecommendations_ = showAIOperations_ = true;
                 showServerLauncher_ = false;
             }
             ImGui::EndMenu();
@@ -1134,7 +1225,6 @@ namespace stnks
         ImGui::EndMenuBar();
     }
 
-    // ── Strategy Wizard (Dockable) ─────────────────────────────────────────────
 
     void UI::ShowStrategyWizard()
     {
@@ -1238,7 +1328,6 @@ namespace stnks
         }
     }
 
-    // ── Stock Charts ───────────────────────────────────────────────────────────
 
     void UI::ShowStockCharts()
     {
@@ -1271,6 +1360,9 @@ namespace stnks
                 bool open = true;
                 if (ImGui::BeginTabItem(it->symbol.c_str(), &open))
                 {
+                    // Track focused chart for wizard context
+                    wizard_.SetFocusedChart(it->symbol, GetCurrentPrice(it->symbol));
+
                     DrawChartTab(*it);
                     ImGui::EndTabItem();
                 }
@@ -1427,7 +1519,8 @@ namespace stnks
             ImVec2 btnMin(chartMin.x + 8.f, chartMin.y + 8.f);
             ImVec2 btnMax(btnMin.x + textSz.x + pad * 2.f, btnMin.y + textSz.y + pad * 2.f);
 
-            bool hovered = ImGui::IsMouseHoveringRect(btnMin, btnMax);
+            bool winHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+            bool hovered = winHovered && ImGui::IsMouseHoveringRect(btnMin, btnMax);
             ImU32 bgCol  = hovered ? IM_COL32(30, 50, 90, 230)  : IM_COL32(15, 20, 35, 200);
             ImU32 border = hovered ? IM_COL32(80, 130, 220, 255) : IM_COL32(50, 65, 100, 180);
             ImU32 textCol = hovered ? IM_COL32(255, 255, 255, 255) : IM_COL32(180, 190, 210, 220);
@@ -1450,7 +1543,6 @@ namespace stnks
             candles);
     }
 
-    // ── Detached Charts ────────────────────────────────────────────────────────
 
     void UI::RenderDetachedCharts()
     {
@@ -1502,6 +1594,10 @@ namespace stnks
         };
 
         dc.onWireTearOut = [this](StockChart& chart, const std::string& sym) {
+            chart.onEventMarkerClicked = [this](const std::string& /*symbol*/, int /*candleIdx*/) {
+                showMarketInsights_ = true;
+                insightsPanel_->FocusTab(InsightsTab::Events);
+            };
             chart.onIndicatorTearOut = [this, sym](const std::string& indicatorName) {
                 StockQuote q;
                 for (auto& p : charts_)
@@ -1527,7 +1623,6 @@ namespace stnks
         };
     }
 
-    // ── Symbol Selector ────────────────────────────────────────────────────────
 
     void UI::ShowSymbolSelector()
     {
@@ -1555,7 +1650,6 @@ namespace stnks
                         switch (src)
                         {
                         case BrokerSource::Binance:    marketService_->SetActiveSource("Binance"); break;
-                        case BrokerSource::GBM:        marketService_->SetActiveSource("GBM+"); break;
                         case BrokerSource::MetaTrader:  marketService_->SetActiveSource("MT5"); break;
                         default:                        marketService_->SetActiveSource("Yahoo Finance"); break;
                         }
@@ -1645,7 +1739,6 @@ namespace stnks
 
             auto SourceTag = [](const std::string& src) -> const char* {
                 if (src == "Binance")        return "BIN";
-                if (src == "GBM+")           return "GBM";
                 if (src == "MT5")            return "MT5";
                 if (src == "Yahoo Finance")  return "YHO";
                 return "???";
@@ -1687,7 +1780,6 @@ namespace stnks
         ImGui::End();
     }
 
-    // ── FetchSymbol ────────────────────────────────────────────────────────────
 
     void UI::FetchSymbol(const std::string& symbol,
                          const char* interval,
@@ -1716,7 +1808,6 @@ namespace stnks
         spdlog::info("[UI] Fetching {} ({})", symbol, interval);
     }
 
-    // ── Trade Execution ────────────────────────────────────────────────────────
 
     bool UI::ExecuteOrder(const std::string& symbol, BrokerSource broker,
                           OrderSide side, float quantity, float price)
@@ -1818,7 +1909,6 @@ namespace stnks
         return ExecuteOrder(strategy.symbol, strategy.broker, side, quantity);
     }
 
-    // ── ViewStrategy ───────────────────────────────────────────────────────────
 
     void UI::ViewStrategy(const Strategy& s)
     {
@@ -1867,7 +1957,6 @@ namespace stnks
             charts_.back().timeframeIdx = timeframeIdx;
     }
 
-    // ── GetCurrentPrice ────────────────────────────────────────────────────────
 
     float UI::GetCurrentPrice(const std::string& symbol) const
     {
@@ -1889,7 +1978,6 @@ namespace stnks
         return 0.f;
     }
 
-    // ── Options ────────────────────────────────────────────────────────────────
 
     void UI::ShowOptions()
     {
@@ -2027,7 +2115,6 @@ namespace stnks
         ImGui::End();
     }
 
-    // ── Threads Debugger ───────────────────────────────────────────────────────
 
     void UI::ShowThreadsDebugger()
     {
@@ -2186,7 +2273,6 @@ namespace stnks
         }
     }
 
-    // ── Toast Notifications ────────────────────────────────────────────────────
 
     void UI::PushToast(const std::string& msg, const ImVec4& color, float duration)
     {

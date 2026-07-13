@@ -48,64 +48,40 @@ The GUI client requires SDL2 + OpenGL 3.3. ARM devices like the Raspberry Pi 3 d
 - **vcpkg** -- C++ package manager
 - **Git**
 
-### 1. Install vcpkg
+### 1. Dev Environment Setup
 
 ```bash
-git clone https://github.com/microsoft/vcpkg.git
-cd vcpkg
-
 # Linux/macOS
-./bootstrap-vcpkg.sh
-export VCPKG_ROOT=$(pwd)
+./dev_env/setup-dev.sh
 
 # Windows
-.\bootstrap-vcpkg.bat
-set VCPKG_ROOT=%cd%
+dev_env\setup-dev.bat
 ```
 
-Add `VCPKG_ROOT` to your shell profile so it persists.
+This checks prerequisites (cmake, git) and bootstraps vcpkg if `VCPKG_ROOT` is not set.
 
-### 2. Clone and Build the GUI Client
+### 2. Build
 
 ```bash
-git clone <repo-url> stonks-manager
-cd stonks-manager
+# Linux/macOS
+./dev_env/build.sh              # GUI client (default)
+./dev_env/build.sh --server     # Headless server
+./dev_env/build.sh --tests      # Tests
+./dev_env/build.sh --all        # Everything
+./dev_env/build.sh --release    # Release mode
+./dev_env/build.sh --clean      # Clean + reconfigure
 
-cmake -B build -S src \
-  -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake
-
-cmake --build build -j$(nproc)
+# Windows
+dev_env\build.bat               # Same flags apply
 ```
 
-This produces:
-- `build/Entry/Entry` (or `.exe`) -- GUI client
-- `build/Server/stnks-server` (or `.exe`) -- headless server
+Produces:
+- `src/build/Entry/Entry` (or `.exe`) -- GUI client
+- `src/build/Server/stnks-server` (or `.exe`) -- headless server
 
-> A default build compiles both GUI and server. The server binary links the full STNKS_CORE (including ImGui), which is unnecessary bloat but works. For a lean server, use the headless build below.
+The `--server` flag sets `STNKS_HEADLESS=ON`, which excludes UI/Charts/ImGui from STNKS_CORE and skips Entry/Tests.
 
-### 3. Build the Headless Server (Raspberry Pi / Linux / Cloud)
-
-```bash
-cmake -B build -S src \
-  -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake \
-  -DVCPKG_MANIFEST_FEATURES="" \
-  -DSTNKS_HEADLESS=ON
-
-cmake --build build --target STNKS_SERVER -j$(nproc)
-```
-
-Both flags are required:
-- `STNKS_HEADLESS=ON` -- excludes UI/Charts/ImGui from STNKS_CORE, skips Entry/Tests
-- `VCPKG_MANIFEST_FEATURES=""` -- skips downloading SDL2/GLEW/GLM/STB/GTest (critical on ARM)
-
-Or use the helper scripts:
-
-```bash
-./dev_env/configure-server.sh   # one-time
-./dev_env/build-server.sh       # build
-```
-
-### 4. Environment Setup
+### 3. Environment Setup
 
 Copy the template, fill in your keys, then source it:
 
@@ -123,7 +99,7 @@ copy dev_env\setup_env.bat .env.bat
 
 At minimum set `ASSETS_STNKS` to the project root. All broker keys are optional -- without them the app uses Yahoo Finance as a free fallback (~15min delayed prices).
 
-### 5. First Run (Database)
+### 4. First Run (Database)
 
 The database is created automatically on first run. Migrations in `db/migrations/` are applied by `MigrationRunner` at startup. To manually seed a database:
 
@@ -657,7 +633,7 @@ When `liveTradingEnabled` is OFF, all orders run in **dry-run mode** (logged, no
 
 ## Environment Variables
 
-Copy the template and fill in your keys (see [Environment Setup](#4-environment-setup)):
+Copy the template and fill in your keys (see [Environment Setup](#3-environment-setup)):
 
 ```bash
 # Core
@@ -707,8 +683,7 @@ src/
       App/                    # SDL2App, ExecutionPipeline
       Broker/                 # IBrokerConnector, Binance/GBM/MT5 impls
       Charts/                 # ChartLayer stack, StockChart, DetachedChart
-      Db/                     # MigrationRunner, SQL query constants
-      ECS/                    # Entity-Component-System (Registry, ComponentPool)
+      Db/                     # DbStore (template ORM), MigrationRunner, Database
       Events/                 # GraphEvent, GraphEventService
       Http/                   # HttpClient (cpr wrapper)
       Market/                 # MarketService, IMarketSource, MarketHours
@@ -727,16 +702,83 @@ src/
 config/
   prompts/                    # AI prompt templates (analysis.txt, etc.)
 dev_env/
-  setup_env.sh                # Environment template (Linux/macOS)
-  setup_env.bat               # Environment template (Windows)
-  configure-server.sh         # One-time CMake configure for headless server
-  build-server.sh             # Build headless server binary
+  build.sh / build.bat        # Universal build script (--server/--tests/--all/--release/--clean)
+  setup-dev.sh / setup-dev.bat # One-time dev env setup (vcpkg bootstrap)
+  setup_env.sh / setup_env.bat # Environment variable templates
   seed_db.sh                  # Apply migrations + seeds to a SQLite database
+  configure-server.sh         # Legacy: one-time CMake configure for headless server
+  build-server.sh             # Legacy: build headless server binary
 db/
   migrations/                 # Versioned SQL migrations (001_create_strategies.sql, ...)
   seeds/                      # Sample seed data
 app/                          # Runtime data dir (strategies.db, logs) -- created at runtime
 ```
-# Technical debt
-- AI code neeeds lots of refactor
-- WIN32 headers (implement agnostic shit)
+## Generic/Reusable Components
+
+These modules are domain-agnostic and can be extracted for use in non-finance projects:
+
+### DbStore (Template ORM)
+
+Schema-driven CRUD for any struct mapped to SQLite. Define the schema once, get INSERT/UPDATE/DELETE/SELECT/CREATE TABLE for free.
+
+```cpp
+#include <Db/DbStore.hpp>
+
+struct Todo {
+    int64_t     id = 0;
+    std::string title;
+    bool        done = false;
+    int64_t     createdAt = 0;
+};
+
+inline const auto kTodoSchema = db::MakeSchema<Todo>(
+    "todos", &Todo::id,
+    db::Col("title",      &Todo::title,     "TEXT",    "NOT NULL"),
+    db::Col("done",       &Todo::done,      "INTEGER", "DEFAULT 0"),
+    db::Col("created_at", &Todo::createdAt, "INTEGER", "NOT NULL")
+);
+
+// Usage:
+db::DbStore store(dbHandle, kTodoSchema);
+store.CreateTable();
+int64_t id = store.Insert(todo);
+store.Update(todo);
+store.Delete(id);
+auto all = store.GetAll("ORDER BY created_at DESC");
+auto active = store.Where("done=?", false);
+auto count = store.Count("done=?", true);
+bool exists = store.Exists("title=?", "Buy milk");
+auto first = store.FindOne("id=?", 42);
+```
+
+Supports: `string`, `float`, `double`, `int`, `int64_t`, `bool`, enums. Named queries from `.sql` files via `SetQueries()`.
+
+### EnumTraits (Template Enum Registry)
+
+Zero-boilerplate enum-to-string and string-to-enum conversion.
+
+```cpp
+#include <EnumTraits.hpp>
+
+enum class Color { Red, Green, Blue };
+
+template<> struct EnumTraits<Color> {
+    static constexpr std::pair<Color, const char*> values[] = {
+        {Color::Red, "Red"}, {Color::Green, "Green"}, {Color::Blue, "Blue"}
+    };
+};
+
+EnumToString(Color::Red);           // "Red"
+EnumFromString<Color>("Green");     // Color::Green
+EnumCount<Color>();                 // 3
+```
+
+### Other Reusable Modules
+
+- **ThreadPool / ThreadRegistry / WorkerThread** -- Generic threading with named workers
+- **AsyncQueue** -- Lock-free SPSC ring buffer
+- **HttpClient** -- cpr wrapper with async support
+- **IWebSocketClient / WebSocketClient** -- TLS WebSocket with auto-reconnect
+- **EnvOverrides** -- Runtime env var overrides with `.env` file persistence
+- **MigrationRunner** -- Versioned SQL migration system
+- **Database** -- SQLite connection with WAL mode, busy timeout, query file loading

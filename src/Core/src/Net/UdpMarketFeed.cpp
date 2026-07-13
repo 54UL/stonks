@@ -5,7 +5,6 @@
 
 namespace stnks
 {
-    // ── ENet global init (reference counted by enet itself) ─────────────────────
 
     static struct ENetGlobalInit
     {
@@ -235,7 +234,6 @@ namespace stnks
     {
         while (running_.load())
         {
-            // ── Create ENet host + initiate connection ────────────────────────
             host_ = enet_host_create(nullptr, 1, NET_CHANNEL_COUNT, 0, 0);
             if (!host_)
             {
@@ -272,7 +270,6 @@ namespace stnks
             lastHeartbeat_ = std::chrono::steady_clock::now();
             lastHeartbeatSent_ = std::chrono::steady_clock::now();
 
-            // ── Connection + active loop ──────────────────────────────────────
             bool shouldReconnect = false;
 
             while (running_.load())
@@ -354,7 +351,6 @@ namespace stnks
                 if (shouldReconnect) break;
             }
 
-            // ── Cleanup + reconnect if needed ─────────────────────────────────
             if (!running_.load()) break;
 
             if (shouldReconnect)

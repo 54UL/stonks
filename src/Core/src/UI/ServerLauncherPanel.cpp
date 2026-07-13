@@ -43,19 +43,7 @@ namespace stnks
         if (binSecret) strncpy(bin.apiSecret, binSecret, sizeof(bin.apiSecret) - 1);
         if (binSbox && std::string(binSbox) == "0") bin.sandbox = false;
 
-        auto& gbm = config_.brokers[1]; // GBM
-        const char* gbmId     = std::getenv("GBM_CLIENT_ID");
-        const char* gbmSecret = std::getenv("GBM_CLIENT_SECRET");
-        const char* gbmToken  = std::getenv("GBM_REFRESH_TOKEN");
-        const char* gbmAcct   = std::getenv("GBM_ACCOUNT_ID");
-        const char* gbmSbox   = std::getenv("GBM_SANDBOX");
-        if (gbmId)     { strncpy(gbm.clientId,     gbmId,     sizeof(gbm.clientId) - 1);     gbm.enabled = true; }
-        if (gbmSecret) strncpy(gbm.clientSecret, gbmSecret, sizeof(gbm.clientSecret) - 1);
-        if (gbmToken)  strncpy(gbm.refreshToken, gbmToken,  sizeof(gbm.refreshToken) - 1);
-        if (gbmAcct)   strncpy(gbm.accountId,    gbmAcct,   sizeof(gbm.accountId) - 1);
-        if (gbmSbox && std::string(gbmSbox) == "0") gbm.sandbox = false;
-
-        auto& mt5 = config_.brokers[2]; // MetaTrader
+        auto& mt5 = config_.brokers[1]; // MetaTrader
         const char* mtKey  = std::getenv("MT5_API_KEY");
         const char* mtAcct = std::getenv("MT5_ACCOUNT_ID");
         if (mtKey)  { strncpy(mt5.apiKey,    mtKey,  sizeof(mt5.apiKey) - 1);    mt5.enabled = true; }
@@ -134,20 +122,8 @@ namespace stnks
             cmd += " --env BINANCE_API_SECRET=\"" + std::string(bin.apiSecret) + "\"";
         if (bin.enabled)
             cmd += " --env BINANCE_SANDBOX=" + std::string(bin.sandbox ? "1" : "0");
-        // GBM
-        auto& gbm = config_.brokers[1];
-        if (gbm.enabled && gbm.clientId[0])
-            cmd += " --env GBM_CLIENT_ID=\"" + std::string(gbm.clientId) + "\"";
-        if (gbm.enabled && gbm.clientSecret[0])
-            cmd += " --env GBM_CLIENT_SECRET=\"" + std::string(gbm.clientSecret) + "\"";
-        if (gbm.enabled && gbm.refreshToken[0])
-            cmd += " --env GBM_REFRESH_TOKEN=\"" + std::string(gbm.refreshToken) + "\"";
-        if (gbm.enabled && gbm.accountId[0])
-            cmd += " --env GBM_ACCOUNT_ID=\"" + std::string(gbm.accountId) + "\"";
-        if (gbm.enabled)
-            cmd += " --env GBM_SANDBOX=" + std::string(gbm.sandbox ? "1" : "0");
         // MetaTrader
-        auto& mt5 = config_.brokers[2];
+        auto& mt5 = config_.brokers[1];
         if (mt5.enabled && mt5.apiKey[0])
             cmd += " --env MT5_API_KEY=\"" + std::string(mt5.apiKey) + "\"";
         if (mt5.enabled && mt5.accountId[0])
@@ -272,7 +248,6 @@ namespace stnks
 #endif
     }
 
-    // ── Drawing ─────────────────────────────────────────────────────────────
 
     void ServerLauncherPanel::Draw(bool* open)
     {
@@ -439,14 +414,13 @@ namespace stnks
         ImGui::TextDisabled("Configure broker connections. All brokers run in dry-run mode.");
         ImGui::Spacing();
 
-        struct BrokerMeta { const char* name; const char* icon; ImVec4 color; bool hasOAuth; };
+        struct BrokerMeta { const char* name; const char* icon; ImVec4 color; };
         static const BrokerMeta meta[] = {
-            {"Binance",    "[B]", {0.96f, 0.76f, 0.07f, 1.f}, false},
-            {"GBM+",       "[G]", {0.20f, 0.60f, 0.86f, 1.f}, true},
-            {"MetaTrader", "[M]", {0.30f, 0.75f, 0.40f, 1.f}, false},
+            {"Binance",    "[B]", {0.96f, 0.76f, 0.07f, 1.f}},
+            {"MetaTrader", "[M]", {0.30f, 0.75f, 0.40f, 1.f}},
         };
 
-        for (int i = 0; i < 3; ++i)
+        for (int i = 0; i < 2; ++i)
         {
             auto& broker = config_.brokers[i];
             auto& m = meta[i];
@@ -464,26 +438,18 @@ namespace stnks
             {
                 ImGui::Indent(24.f);
 
-                if (m.hasOAuth)
+                // All brokers use API Key auth
+                ImGui::InputText("API Key", broker.apiKey, sizeof(broker.apiKey),
+                                 broker.apiKey[0] ? ImGuiInputTextFlags_Password : 0);
+
+                if (i == 0) // Binance also has API Secret
                 {
-                    // GBM OAuth2 fields
-                    ImGui::InputText("Client ID", broker.clientId, sizeof(broker.clientId));
-                    ImGui::InputText("Client Secret", broker.clientSecret, sizeof(broker.clientSecret),
-                                     broker.clientSecret[0] ? ImGuiInputTextFlags_Password : 0);
-                    ImGui::InputText("Refresh Token", broker.refreshToken, sizeof(broker.refreshToken),
-                                     broker.refreshToken[0] ? ImGuiInputTextFlags_Password : 0);
-                    ImGui::InputText("Account ID", broker.accountId, sizeof(broker.accountId));
-                }
-                else
-                {
-                    // API Key auth (Binance, MetaTrader)
-                    ImGui::InputText("API Key", broker.apiKey, sizeof(broker.apiKey),
-                                     broker.apiKey[0] ? ImGuiInputTextFlags_Password : 0);
                     ImGui::InputText("API Secret", broker.apiSecret, sizeof(broker.apiSecret),
                                      broker.apiSecret[0] ? ImGuiInputTextFlags_Password : 0);
-                    if (i == 2) // MetaTrader also has account ID
-                        ImGui::InputText("Account ID", broker.accountId, sizeof(broker.accountId));
                 }
+
+                if (i == 2) // MetaTrader also has account ID
+                    ImGui::InputText("Account ID", broker.accountId, sizeof(broker.accountId));
 
                 ImGui::Unindent(24.f);
             }

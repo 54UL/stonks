@@ -66,19 +66,16 @@ namespace stnks
     public:
         virtual ~IWebSocketClient() = default;
 
-        // ── Lifecycle ─────────────────────────────────────────────────────────────
 
         virtual void Connect(const WsConfig& config) = 0;
         virtual void Disconnect() = 0;
         virtual WsState GetState() const = 0;
         virtual bool IsConnected() const { return GetState() == WsState::Connected; }
 
-        // ── Sending ───────────────────────────────────────────────────────────────
 
         virtual void SendText(const std::string& message) = 0;
         virtual void SendBinary(const std::string& data) = 0;
 
-        // ── Callbacks (set before Connect) ────────────────────────────────────────
 
         using MessageCallback    = std::function<void(const std::string& data, WsMessageType type)>;
         using StateCallback      = std::function<void(WsState newState)>;
@@ -88,7 +85,6 @@ namespace stnks
         virtual void SetOnStateChange(StateCallback cb) = 0;
         virtual void SetOnError(ErrorCallback cb) = 0;
 
-        // ── Diagnostics ───────────────────────────────────────────────────────────
 
         // Round-trip latency of last ping/pong in milliseconds
         virtual float GetLatencyMs() const { return 0.f; }

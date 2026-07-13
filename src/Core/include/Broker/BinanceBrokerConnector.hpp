@@ -53,7 +53,6 @@ namespace stnks
         BinanceBrokerConnector(HttpClient& http);
         ~BinanceBrokerConnector() override;
 
-        // ── IBrokerConnector ─────────────────────────────────────────────────────
 
         void Initialize(const BrokerConfig& config) override;
         void Connect() override;
@@ -85,7 +84,6 @@ namespace stnks
         uint64_t GetTicksReceived() const override;
         const BrokerConfig& GetConfig() const override { return config_; }
 
-        // ── IBrokerDataSource / IMarketSource ────────────────────────────────────
 
         const char* GetName() const override { return "Binance"; }
         bool IsRealtime() const override { return true; }

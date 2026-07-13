@@ -9,7 +9,6 @@
 
 namespace stnks::ui
 {
-    // ── Semantic Colors ─────────────────────────────────────────────────────
 
     // Price movement / P&L
     inline constexpr ImVec4 kColorBullish     = {0.15f, 0.65f, 0.36f, 1.f};
@@ -63,11 +62,9 @@ namespace stnks::ui
     inline constexpr ImVec4 kDeleteText       = {0.9f, 0.3f, 0.3f, 1.f};
     inline constexpr ImVec4 kSelectedTabBtn   = {0.2f, 0.4f, 0.7f, 1.f};
 
-    // ── Timeframe button colors ─────────────────────────────────────────────
     inline constexpr ImVec4 kTimeframeBtnRT   = {0.15f, 0.45f, 0.20f, 1.f};
     inline constexpr ImVec4 kTimeframeBtnNorm = {0.20f, 0.28f, 0.45f, 1.f};
 
-    // ── Activity Bar palette (ImU32 for ImDrawList) ───────────────────────
     inline constexpr ImU32 kABCharts     = IM_COL32( 60, 140, 220, 255);  // blue
     inline constexpr ImU32 kABStrategies = IM_COL32(220, 160,  40, 255);  // gold
     inline constexpr ImU32 kABPortfolio  = IM_COL32( 50, 180, 100, 255);  // green
@@ -80,6 +77,7 @@ namespace stnks::ui
     inline constexpr ImU32 kABSignals    = IM_COL32( 60, 200, 180, 255);  // teal
     inline constexpr ImU32 kABServer     = IM_COL32(120, 120, 140, 255);  // gray
     inline constexpr ImU32 kABThreads    = IM_COL32(100, 100, 120, 255);  // dark gray
+    inline constexpr ImU32 kABPositions  = IM_COL32(230, 120,  90, 255);  // coral
     inline constexpr ImU32 kABBarBg      = IM_COL32( 15,  18,  23, 255);  // bar background
     inline constexpr ImU32 kABTextActive = IM_COL32(255, 255, 255, 255);
     inline constexpr ImU32 kABTextDim    = IM_COL32(200, 200, 200, 180);
@@ -94,14 +92,12 @@ namespace stnks::ui
             ((col >> 16) & 0xFF) / 3, 180);
     }
 
-    // ── Layout Sizes ────────────────────────────────────────────────────────
 
     inline constexpr float kDisabledAlpha       = 0.5f;
     inline constexpr float kDismissedAlpha      = 0.4f;
     inline constexpr float kPortfolioSampleSec  = 15.f;
     inline constexpr int   kPortfolioMaxSamples = 240;
 
-    // ── Transform Functions ─────────────────────────────────────────────────
     // Centralized enum→display transforms: color, label, icon.
 
     // -- MarketType --
@@ -124,7 +120,6 @@ namespace stnks::ui
         switch (b)
         {
         case BrokerSource::Binance:    return {0.96f, 0.76f, 0.07f, 1.f};
-        case BrokerSource::GBM:        return {0.20f, 0.60f, 0.86f, 1.f};
         case BrokerSource::MetaTrader: return {0.30f, 0.75f, 0.40f, 1.f};
         case BrokerSource::Auto:       return {0.45f, 0.80f, 0.85f, 1.f};
         }
@@ -136,7 +131,6 @@ namespace stnks::ui
         switch (b)
         {
         case BrokerSource::Binance:    return "[B]";
-        case BrokerSource::GBM:        return "[G]";
         case BrokerSource::MetaTrader: return "[M]";
         case BrokerSource::Auto:       return "[A]";
         }
@@ -148,7 +142,6 @@ namespace stnks::ui
         switch (b)
         {
         case BrokerSource::Binance:    return "Binance Spot - Crypto";
-        case BrokerSource::GBM:        return "GBM+ - Bolsa Mexicana";
         case BrokerSource::MetaTrader: return "MetaTrader 5 - Forex/CFD";
         default:                       return "Auto - resolved from data source";
         }
@@ -158,7 +151,6 @@ namespace stnks::ui
     inline ImVec4 SourceNameColor(const std::string& src)
     {
         if (src == "Binance")        return {0.96f, 0.76f, 0.07f, 1.f};
-        if (src == "GBM+")           return {0.20f, 0.60f, 0.86f, 1.f};
         if (src == "MT5")            return {0.30f, 0.75f, 0.40f, 1.f};
         if (src == "Yahoo Finance")  return {0.55f, 0.30f, 0.75f, 1.f};
         return {0.50f, 0.50f, 0.55f, 1.f};
@@ -378,7 +370,6 @@ namespace stnks::ui
         return kColorDisconnected;
     }
 
-    // ── Age Formatting ──────────────────────────────────────────────────────
 
     // Full verbose format: "3d 2h 15m 4s"
     inline void FormatAge(char* buf, int bufSize, int64_t elapsed)
@@ -410,7 +401,6 @@ namespace stnks::ui
         else                   snprintf(buf, bufSize, "%lldd", (long long)(secs / 86400));
     }
 
-    // ── Event Time Range ────────────────────────────────────────────────────
 
     enum class EventTimeRange : int
     {
@@ -434,7 +424,6 @@ namespace stnks::ui
         return 86400;
     }
 
-    // ── Theme Setup ─────────────────────────────────────────────────────────
 
     inline void ApplyDefaultTheme()
     {

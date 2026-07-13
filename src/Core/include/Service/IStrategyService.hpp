@@ -21,7 +21,6 @@ namespace stnks
     public:
         virtual ~IStrategyService() = default;
 
-        // ── Strategy CRUD ────────────────────────────────────────────────────
 
         virtual int64_t               InsertStrategy(const Strategy& s) = 0;
         virtual bool                  UpdateStrategy(const Strategy& s) = 0;
@@ -32,7 +31,6 @@ namespace stnks
         virtual std::vector<Strategy> GetActiveStrategies() = 0;
         virtual std::vector<Strategy> GetStrategiesBySymbol(const std::string& symbol) = 0;
 
-        // ── Market data ──────────────────────────────────────────────────────
 
         virtual StockQuote FetchQuote(const std::string& symbol,
                                       const std::string& interval = "1d",
@@ -40,7 +38,6 @@ namespace stnks
 
         virtual std::vector<SymbolMatch> SearchSymbols(const std::string& query) = 0;
 
-        // ── Server status ────────────────────────────────────────────────────
 
         virtual bool IsConnected() const = 0;
         virtual bool IsMonitoring() const = 0;

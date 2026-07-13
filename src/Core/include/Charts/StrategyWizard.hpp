@@ -11,11 +11,6 @@
 
 namespace stnks
 {
-    // Unified strategy creation/editing wizard.
-    // Can render as either:
-    //  - A standalone dockable window (always open, independent panel)
-    //  - A chart overlay (legacy "+ Strategy" button mode)
-    // Syncs bidirectionally with gizmos.
     class StrategyWizard
     {
     public:
@@ -86,17 +81,24 @@ namespace stnks
         Strategy& GetStrategy() { return strategy_; }
         const Strategy& GetStrategy() const { return strategy_; }
 
+        void SetFocusedChart(const std::string& symbol, float currentPrice)
+        {
+            focusedSymbol_ = symbol;
+            focusedPrice_  = currentPrice;
+        }
+        const std::string& GetFocusedSymbol() const { return focusedSymbol_; }
+        float GetFocusedPrice() const { return focusedPrice_; }
+
         bool WasConfirmed() const { return confirmed_; }
         bool WasCancelled() const { return cancelled_; }
         void ConsumeResult() { confirmed_ = false; cancelled_ = false; }
 
-        // Call once per frame before drawing to reset click detection state.
         void BeginFrame()
         {
             chartClickCandle_ = -1;
         }
 
-        // IMPORTANT: Call this BEFORE DrawDockable()/DrawOverlay() each frame to detect chart clicks.
+        // Must be called BEFORE DrawDockable()/DrawOverlay() each frame.
         // Can be called multiple times per frame (once per chart panel) — first valid click wins.
         void PreUpdate(const ImVec2& chartMin, const ImVec2& chartMax,
                        int focusedCandle, int totalCandles,
@@ -106,12 +108,6 @@ namespace stnks
             if (timeMode_ != TimeMode::Historical) return;
             if (chartClickCandle_ >= 0) return; // Already detected a click this frame
 
-            // Detect left-click within the chart content area.
-            // We check that:
-            //  1. Mouse was clicked this frame
-            //  2. Mouse is within chart pixel bounds
-            //  3. No popup is blocking (popups steal input)
-            //  4. focusedCandle is valid (chart resolved it)
             if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
                 !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopup))
             {
@@ -127,12 +123,9 @@ namespace stnks
             }
         }
 
-        // Draw as a standalone dockable window (independent panel).
-        // Returns true if the panel is visible (for dockspace management).
         bool DrawDockable(bool* pOpen, const std::vector<Candle>* candles,
                           int focusedCandle, int totalCandles)
         {
-            // Process historical click (detected in PreUpdate)
             if (mode_ != Mode::Closed && timeMode_ == TimeMode::Historical && chartClickCandle_ >= 0)
             {
                 int lastIdx = chartClickTotalCandles_ - 1;
@@ -151,7 +144,6 @@ namespace stnks
 
             ImGui::SetNextWindowSize(ImVec2(280.f, 420.f), ImGuiCond_FirstUseEver);
 
-            // Styling
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 12));
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.f);
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 6));
@@ -188,14 +180,12 @@ namespace stnks
             return visible;
         }
 
-        // Draw as a chart overlay (original behavior, for redundancy button).
         void DrawOverlay(const ImVec2& chartMin, const ImVec2& chartMax,
                          int focusedCandle, int totalCandles,
                          const std::vector<Candle>* candles)
         {
             if (mode_ == Mode::Closed) return;
 
-            // Process historical click (detected in PreUpdate)
             if (timeMode_ == TimeMode::Historical && chartClickCandle_ >= 0)
             {
                 int lastIdx = chartClickTotalCandles_ - 1;
@@ -215,7 +205,6 @@ namespace stnks
             confirmed_ = false;
             cancelled_ = false;
 
-            // Position: first time at top-left of chart, then user can drag
             if (firstOpen_)
             {
                 ImVec2 initPos(chartMin.x + 10.f, chartMin.y + 10.f);
@@ -225,7 +214,6 @@ namespace stnks
 
             ImGui::SetNextWindowSize(ImVec2(260.f, 0.f), ImGuiCond_Always);
 
-            // Styling
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 12));
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.f);
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.f);
@@ -263,7 +251,6 @@ namespace stnks
             ImGui::PopStyleVar(4);
         }
 
-        // Legacy compatibility: Draw() calls DrawOverlay()
         void Draw(const ImVec2& chartMin, const ImVec2& chartMax,
                   int focusedCandle, int totalCandles,
                   const std::vector<Candle>* candles)
@@ -272,12 +259,11 @@ namespace stnks
         }
 
     private:
-        // Compute TP/SL offset relative to visible chart range (or fallback to 2% of price)
         float ComputeDefaultOffset(float price) const
         {
             if (visibleRange_ > 0.f)
-                return visibleRange_ * 0.25f; // 25% of visible price range
-            return price * 0.02f;             // fallback: 2% of price
+                return visibleRange_ * 0.25f;
+            return price * 0.02f;
         }
 
         Mode      mode_      = Mode::Closed;
@@ -289,17 +275,18 @@ namespace stnks
         bool      firstOpen_ = true;
         float     visibleRange_ = 0.f;
 
-        // Historical click detection (set in PreUpdate, consumed in Draw)
         int                        chartClickCandle_       = -1;
         int                        chartClickTotalCandles_ = 0;
         const std::vector<Candle>* chartClickCandles_      = nullptr;
+
+        std::string focusedSymbol_;
+        float       focusedPrice_ = 0.f;
 
         char symbolBuf_[64] = "";
         char notesBuf_[256] = "";
 
         void DrawTPSLFields()
         {
-            // Take Profit
             ImGui::TextDisabled("Take Profit");
             ImGui::SetNextItemWidth(-50.f);
             ImGui::InputFloat("##wizTP", &strategy_.takeProfit, 0.f, 0.f, "%.4f");
@@ -311,7 +298,6 @@ namespace stnks
                 ImGui::TextColored(col, "%+.2f%%", pct);
             }
 
-            // Stop Loss
             ImGui::TextDisabled("Stop Loss");
             ImGui::SetNextItemWidth(-50.f);
             ImGui::InputFloat("##wizSL", &strategy_.stopLoss, 0.f, 0.f, "%.4f");
@@ -323,7 +309,6 @@ namespace stnks
                 ImGui::TextColored(col, "%+.2f%%", pct);
             }
 
-            // R:R
             float rr = strategy_.RiskReward();
             if (rr > 0.f)
             {
@@ -334,62 +319,94 @@ namespace stnks
             }
         }
 
-        // Draw the idle state (when no strategy is being created/edited)
         void DrawIdleState()
         {
-            ImGui::TextDisabled("No active strategy wizard.");
+            const std::string& activeSymbol = !focusedSymbol_.empty() ? focusedSymbol_
+                : (symbolBuf_[0] ? std::string(symbolBuf_) : std::string());
+            float activePrice = focusedPrice_;
+
+            if (!activeSymbol.empty())
+            {
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                ImVec2 cursor = ImGui::GetCursorScreenPos();
+                float availW = ImGui::GetContentRegionAvail().x;
+
+                dl->AddRectFilled(
+                    ImVec2(cursor.x - 4, cursor.y),
+                    ImVec2(cursor.x + availW + 4, cursor.y + 36.f),
+                    IM_COL32(20, 25, 40, 255), 6.f);
+                dl->AddRect(
+                    ImVec2(cursor.x - 4, cursor.y),
+                    ImVec2(cursor.x + availW + 4, cursor.y + 36.f),
+                    IM_COL32(60, 100, 180, 120), 6.f);
+
+                ImGui::SetCursorScreenPos(ImVec2(cursor.x + 8, cursor.y + 4));
+                ImGui::TextColored(ImVec4(0.4f, 0.75f, 1.f, 1.f), "%s", activeSymbol.c_str());
+                if (activePrice > 0.f)
+                {
+                    ImGui::SameLine();
+                    char pb[32]; FmtPrice(pb, sizeof(pb), activePrice, activeSymbol);
+                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.8f, 1.f), "@ %s", pb);
+                }
+                ImGui::SameLine(availW - 30.f);
+                ImGui::TextDisabled("LIVE");
+
+                ImGui::SetCursorScreenPos(ImVec2(cursor.x, cursor.y + 42.f));
+            }
+            else
+            {
+                ImGui::TextDisabled("No chart focused.");
+                ImGui::TextDisabled("Open a chart to create strategies.");
+                return;
+            }
+
             ImGui::Spacing();
-            ImGui::TextWrapped("Click '+ Strategy' on a chart or right-click "
-                               "on the chart to create a new strategy.");
+
+            float w = ImGui::GetContentRegionAvail().x;
+            float btnW = (w - 6.f) * 0.5f;
+            float btnH = 34.f;
+
+            auto QuickBtn = [&](const char* label, const char* icon, StrategyType type,
+                               StrategyDirection dir, ImVec4 bgCol, ImVec4 hoverCol) {
+                ImGui::PushStyleColor(ImGuiCol_Button, bgCol);
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hoverCol);
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                    ImVec4(hoverCol.x + 0.05f, hoverCol.y + 0.05f, hoverCol.z + 0.05f, 1.f));
+
+                char fullLabel[64];
+                snprintf(fullLabel, sizeof(fullLabel), "%s %s", icon, label);
+                if (ImGui::Button(fullLabel, ImVec2(btnW, btnH)))
+                    OpenCreate(activeSymbol, type, dir, activePrice);
+
+                ImGui::PopStyleColor(3);
+            };
+
+            ImGui::TextDisabled("TP / SL Strategy");
+            QuickBtn("Long", "\xe2\x96\xb2", StrategyType::TPSL, StrategyDirection::Long,
+                     {0.08f, 0.32f, 0.18f, 1.f}, {0.12f, 0.42f, 0.22f, 1.f});
+            ImGui::SameLine(0.f, 6.f);
+            QuickBtn("Short", "\xe2\x96\xbc", StrategyType::TPSL, StrategyDirection::Short,
+                     {0.35f, 0.08f, 0.08f, 1.f}, {0.45f, 0.12f, 0.12f, 1.f});
+
+            ImGui::Spacing();
+
+            ImGui::TextDisabled("Position Tracking");
+            QuickBtn("Long", "\xe2\x96\xb2", StrategyType::Position, StrategyDirection::Long,
+                     {0.08f, 0.20f, 0.32f, 1.f}, {0.12f, 0.28f, 0.42f, 1.f});
+            ImGui::SameLine(0.f, 6.f);
+            QuickBtn("Short", "\xe2\x96\xbc", StrategyType::Position, StrategyDirection::Short,
+                     {0.30f, 0.08f, 0.22f, 1.f}, {0.40f, 0.12f, 0.28f, 1.f});
+
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
 
-            ImGui::TextDisabled("Quick Create:");
-            ImGui::Spacing();
-
-            // Quick-create buttons for when user wants to start without a chart
-            float w = ImGui::GetContentRegionAvail().x;
-            float btnW = (w - 8.f) / 2.f;
-
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.35f, 0.2f, 1.f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.15f, 0.45f, 0.25f, 1.f));
-            if (ImGui::Button("Long TP/SL", ImVec2(btnW, 0)))
-                OpenCreate(symbolBuf_[0] ? symbolBuf_ : "AAPL",
-                           StrategyType::TPSL, StrategyDirection::Long, 0.f);
-            ImGui::PopStyleColor(2);
-
-            ImGui::SameLine(0.f, 8.f);
-
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.4f, 0.1f, 0.1f, 1.f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.5f, 0.15f, 0.15f, 1.f));
-            if (ImGui::Button("Short TP/SL", ImVec2(btnW, 0)))
-                OpenCreate(symbolBuf_[0] ? symbolBuf_ : "AAPL",
-                           StrategyType::TPSL, StrategyDirection::Short, 0.f);
-            ImGui::PopStyleColor(2);
-
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.25f, 0.35f, 1.f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.15f, 0.35f, 0.45f, 1.f));
-            if (ImGui::Button("Long Position", ImVec2(btnW, 0)))
-                OpenCreate(symbolBuf_[0] ? symbolBuf_ : "AAPL",
-                           StrategyType::Position, StrategyDirection::Long, 0.f);
-            ImGui::PopStyleColor(2);
-
-            ImGui::SameLine(0.f, 8.f);
-
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.1f, 0.25f, 1.f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.45f, 0.15f, 0.3f, 1.f));
-            if (ImGui::Button("Short Position", ImVec2(btnW, 0)))
-                OpenCreate(symbolBuf_[0] ? symbolBuf_ : "AAPL",
-                           StrategyType::Position, StrategyDirection::Short, 0.f);
-            ImGui::PopStyleColor(2);
+            ImGui::TextDisabled("Or right-click on a chart candle for precise entry.");
         }
 
-        // Draw the active wizard content (shared between dockable and overlay modes)
         void DrawActiveWizard(const std::vector<Candle>* candles,
                               int focusedCandle, int totalCandles)
         {
-            // === Type selector (create mode) ===
             if (mode_ == Mode::Create)
             {
                 int typeInt = (int)strategy_.type;
@@ -442,12 +459,10 @@ namespace stnks
             }
             else
             {
-                // Edit mode: prominent colored header bar
                 ImVec2 avail = ImGui::GetContentRegionAvail();
                 ImVec2 cursor = ImGui::GetCursorScreenPos();
                 ImDrawList* dl = ImGui::GetWindowDrawList();
 
-                // Orange/amber header bar for edit mode
                 ImU32 headerCol = IM_COL32(200, 140, 40, 255);
                 ImU32 headerBg  = IM_COL32(60, 40, 15, 255);
                 float barH = 28.f;
@@ -458,7 +473,6 @@ namespace stnks
                             ImVec2(cursor.x + avail.x + 4, cursor.y + barH),
                             headerCol, 4.f, 0, 1.5f);
 
-                // Edit icon + text
                 ImVec4 typeCol = strategy_.IsTPSL() ? ImVec4(0.4f, 0.7f, 1.f, 1.f)
                                : strategy_.IsPosition() ? ImVec4(0.4f, 1.f, 0.6f, 1.f)
                                : ImVec4(0.9f, 0.6f, 1.f, 1.f);
@@ -475,7 +489,8 @@ namespace stnks
                 ImGui::Spacing();
             }
 
-            // === Time mode (create only) ===
+
+
             if (mode_ == Mode::Create)
             {
                 int tm = (int)timeMode_;
@@ -518,7 +533,8 @@ namespace stnks
                 ImGui::Spacing();
             }
 
-            // === Symbol ===
+
+
             if (mode_ == Mode::Create)
             {
                 ImGui::TextDisabled("Symbol");
@@ -526,7 +542,8 @@ namespace stnks
                 ImGui::InputText("##wizSym", symbolBuf_, sizeof(symbolBuf_));
             }
 
-            // === Direction ===
+
+
             ImGui::TextDisabled("Direction");
             {
                 int dir = (int)strategy_.direction;
@@ -554,7 +571,8 @@ namespace stnks
 
             ImGui::Spacing();
 
-            // === Entry Price ===
+
+
             ImGui::TextDisabled("Entry");
             ImGui::SetNextItemWidth(-1.f);
             if (timeMode_ == TimeMode::Historical && selectedCandle_ >= 0)
@@ -566,7 +584,8 @@ namespace stnks
                 ImGui::InputFloat("##wizEntry", &strategy_.entryPrice, 0.f, 0.f, "%.4f");
             }
 
-            // === TP/SL (TPSL type — always shown; Position — optional collapsible) ===
+
+
             if (strategy_.type == StrategyType::TPSL)
             {
                 ImGui::Spacing();
@@ -578,7 +597,6 @@ namespace stnks
                 bool hasTargets = strategy_.takeProfit > 0.f || strategy_.stopLoss > 0.f;
                 if (!hasTargets)
                 {
-                    // Show a button to optionally add TP/SL to the position
                     if (ImGui::SmallButton("+ Add TP/SL targets"))
                     {
                         float offset = strategy_.entryPrice > 0.f ? ComputeDefaultOffset(strategy_.entryPrice) : 0.f;

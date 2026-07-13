@@ -38,6 +38,15 @@ namespace stnks
         }
         if (hasAlert) ImGui::PopStyleColor(2);
 
+        DrawContent();
+        ImGui::End();
+    }
+
+    void MarketSignalsPanel::DrawContent()
+    {
+        int actionable = ctx_.signalService->ActionableCount();
+        auto allSignals = ctx_.signalService->GetAll();
+
         DrawToolbar(actionable, allSignals.size());
         DrawFilterTabs();
         ImGui::Separator();
@@ -76,7 +85,6 @@ namespace stnks
         }
 
         ImGui::EndChild();
-        ImGui::End();
     }
 
     void MarketSignalsPanel::DrawToolbar(int actionable, size_t total)

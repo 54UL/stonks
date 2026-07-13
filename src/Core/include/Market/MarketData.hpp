@@ -196,7 +196,7 @@ namespace stnks
         std::string name;
         std::string exchange;
         std::string type;    // "EQUITY", "ETF", "CRYPTO", etc.
-        std::string source;  // Data source name ("Yahoo Finance", "Binance", "GBM+", etc.)
+        std::string source;  // Data source name ("Yahoo Finance", "Binance", "MT5", etc.)
     };
 
 } // namespace stnks

@@ -14,7 +14,6 @@
 
 namespace stnks
 {
-    // ── ThreadRegistry ───────────────────────────────────────────────────────────
     // Central owner of all engine threads.
     //
     // Every thread the engine creates — persistent workers AND one-shot pool
@@ -54,7 +53,6 @@ namespace stnks
         ThreadRegistry(const ThreadRegistry&)            = delete;
         ThreadRegistry& operator=(const ThreadRegistry&) = delete;
 
-        // ── Persistent workers ───────────────────────────────────────────────────
 
         // Create a named worker thread.  Returns a reference to the new worker.
         // Caller is responsible for calling worker.Start(fn) when ready.
@@ -76,7 +74,6 @@ namespace stnks
             return (it != workers_.end()) ? it->second.get() : nullptr;
         }
 
-        // ── Pool tasks (one-shot) ────────────────────────────────────────────────
 
         // Submit a task to the thread pool and return a future for the result.
         // This is the replacement for raw std::async calls scattered in Engine.
@@ -86,7 +83,6 @@ namespace stnks
             return taskPool_.enqueue(std::forward<F>(f), std::forward<Args>(args)...);
         }
 
-        // ── Parallel iteration ─────────────────────────────────────────────────────
 
         // Split [0, count) into chunks across pool threads and run fn(begin, end)
         // on each chunk.  Blocks until all chunks complete.
@@ -131,7 +127,6 @@ namespace stnks
             for (auto& f : futures) f.get(); //mmmmmm
         }
 
-        // ── Debug / introspection ────────────────────────────────────────────────
 
         struct ThreadInfo
         {
@@ -161,7 +156,6 @@ namespace stnks
 
         size_t GetPoolSize() const { return poolThreadCount_; }
 
-        // ── Lifecycle ────────────────────────────────────────────────────────────
 
         void Shutdown()
         {
